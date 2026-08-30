@@ -120,20 +120,23 @@ GATE_SITE = {
     "sig": "0F B6 83 B4 02 00 00 33 47 4C 83 E0 01",
     "expected": 0x441A14C,
 }
-# The binary carries two distinct "16:9" float constants one bit apart:
-# 0x3FE38E39 (1.7777778f, exact 16/9) and 0x3FE38E3B (1.7777779f, the
-# camera-component constructor default). Field A/B testing established:
-#   v4  (unconstrain whole 1.75-1.8 window): cutscenes WIDE, loading WIDE
-#   v5  (window minus exact-16/9):           cutscenes BOXED, loading WIDE
-# => cutscene cameras carry EXACTLY the 16/9 float; the loading-hold camera
-# carries a different ~1.77 value (constructor default). So the gate
-# unconstrains ONLY views whose AspectRatio == exact 16/9: cutscenes go Hor+,
-# everything else (loading, exploration at monitor aspect, square photo
-# capture) keeps its constraint. Cave B additionally forces cine views boxed.
+# Gate: unconstrain any camera authored ~16:9 (AspectRatio in the open
+# (1.75, 1.8) window) -> cutscenes/dialogues render Hor+. Exploration and
+# photo cameras carry the patched monitor aspect (>1.8) and square capture
+# cameras (~1.0) fall below the window, so they keep their constraint.
+# Field-tested conclusion (see RESEARCH.md 4f/4g): the loading side-peek
+# CANNOT be fixed by any camera gate - during loads the game holds the next
+# scene's cutscene camera behind a 16:9-sized loading overlay, so boxing
+# loading would box cutscenes too. The range gate (rather than an exact
+# float match) is deliberate: it also widens the main menu and any cutscene
+# shots whose 16:9 aspect was serialized with slightly different float bits.
 CAVE_A = bytes.fromhex(
     "0FB683B4020000"    # movzx eax, byte [rbx+0x2B4]
-    "81BBB0020000398EE33F"  # cmp dword [rbx+0x2B0], 0x3FE38E39 (exact 16/9?)
-    "7503"              # jne   done
+    "8B8BB0020000"      # mov   ecx, [rbx+0x2B0]  (AspectRatio)
+    "81F90000E03F"      # cmp   ecx, 0x3FE00000   (1.75f)
+    "760B"              # jbe   done
+    "81F96666E63F"      # cmp   ecx, 0x3FE66666   (1.8f)
+    "7303"              # jae   done
     "83E0FE"            # and   eax, -2           (clear bConstrainAspectRatio)
     "C3"                # done: ret
 )

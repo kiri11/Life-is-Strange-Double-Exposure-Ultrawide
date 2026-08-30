@@ -344,6 +344,45 @@ done:  C3                              ret
 
 Expected: cutscenes (exact 16/9) -> Hor+ wide; loading (other value) -> constrained pillarbox; exploration (monitor aspect) -> classic; photos -> classic; cave B still forces cine views boxed as second line of defense. Any individual cinematic authored at a different aspect (e.g. 2.39 scope shots) would stay boxed - to be handled per report by adding its exact constant to the gate.
 
+### v6 Field Result
+Cutscenes correctly wide; **loading still wide**; main menu newly pillarboxed (its camera aspect is a ~1.77 value other than exact 16/9). Combined with v4/v5 this contradicts any single-constant model for the loading camera and completes the investigation - see 4g.
+
+---
+
+## 4g. The Loading Side-Peek: Final Analysis and Candidate Solutions
+
+### Conclusion: Loading Is Not a Camera Problem
+Triangulating all field tests:
+
+| Build | Cutscene cams | Loading | Menu |
+|---|---|---|---|
+| v3 (no caves) | boxed | "good" (boxed) | boxed |
+| v4 (range gate) | WIDE | wide | wide |
+| v5 (range minus exact-16/9) | boxed | wide | wide |
+| v6 (exact-16/9 only) | WIDE | wide | boxed |
+
+"Loading" is wide in every build where ANY ~16:9 camera class is unconstrained, and matches no single aspect constant. The consistent explanation: **during loads the game simply holds the destination scene's camera (usually a cutscene-class camera) behind a loading overlay UI that is sized/anchored to 16:9**. At 21:9 with Hor+ cameras, strips of the (still-streaming) world remain visible on both sides of the overlay. Boxing the camera during loading is therefore impossible without boxing the cutscene that uses the same camera one second later - it is a UI/temporal problem, not a camera-identity problem.
+
+The main menu observation confirms the mechanics: the menu camera is authored at a non-exact-16/9 ~1.77 value, so the v6 exact gate boxed it while the v4 range gate widens it.
+
+### Decision
+The range gate (v4 semantics) is the shipping default: it maximizes robustness for cutscene variants (any 16:9-ish authored float goes Hor+) and widens the menu, at the cost of the loading side-peek - accepted as a brief cosmetic issue.
+
+### Candidate Solutions for the Side-Peek (Documented for Future Work)
+1. **Streaming mitigation (`Engine.ini`, low risk, partial):** the side strips look bad mainly because content visibly streams in. Tuning texture/level streaming shrinks the ugly window (content appears already-loaded, though still visible):
+   ```ini
+   [SystemSettings]
+   r.Streaming.PoolSize=4096
+   r.Streaming.FramesForFullUpdate=1
+   r.Streaming.LimitPoolSizeToVRAM=0
+   s.AsyncLoadingTimeLimit=10
+   ```
+   Location: `%localappdata%\Chronos\Saved\Config\Windows\Engine.ini`.
+2. **Loading overlay widget fix (blocked):** stretch the loading screen UI to cover the full viewport. The game ships UE5 IoStore containers (`pakchunk*.utoc/.ucas`); the directory index is encrypted/hashed - no plaintext asset paths are recoverable without the AES key, so identifying and patching the overlay widget asset is currently impractical.
+3. **Minimal runtime mask (UE4SS, complete fix, needs opt-in):** a grace-window mod that reacts to load events only. Design note: under the cave architecture it must NOT toggle `bConstrainAspectRatio` per-frame (the v2 flicker mistake). Instead, during the load window it would write the held camera's `AspectRatio` member outside the gate window (e.g. 1.9f); cave A then keeps it constrained naturally, and the mod restores the value once the level is interactive. One write per load, no per-frame contention.
+4. **Native temporal gate (advanced):** extend cave A with a "recently loaded" check. Requires a writable storage slot (the `.text` caves are R-X; a new RW PE section or `.data` slack would be needed), plus a reset signal hooked into a once-per-load code path, plus reading `GFrameCounter`. Feasible but disproportionate to the cosmetic payoff.
+5. **Diagnostics if ever needed:** a recorder cave appending (vtable, AspectRatio, constrain) tuples per view into an RW ring buffer, dumped externally via `ReadProcessMemory` (no runtime mods inside the game). Useful for mapping camera classes to on-screen moments with certainty.
+
 Result matrix:
 - **Cutscenes/dialogues (cine cameras):** unconstrained -> forced MaintainYFOV branch -> true Hor+ with the authored aspect as divisor. Identical rendering to the user-approved v1 cutscenes.
 - **Exploration:** constrained at the patched monitor aspect - identical to the proven classic 2-offset fix.
