@@ -324,6 +324,26 @@ v5 adds one compare to cave A: views whose `AspectRatio` equals exact-16/9 (`0x3
 - If the loading-hold camera carries the exact-16/9 variant: loading becomes pillarboxed while cutscenes (constructor-default aspect) stay wide - problem solved statically.
 - If loading and cutscenes share the same constant: behavior is identical to v4 (no regression), and the loading issue is confirmed *temporal* (same camera, different moment) - solvable only by time-based masking (post-load grace) or by reducing streaming pop-in (`r.Streaming.*` tweaks in `Engine.ini`).
 
+### v6 (CURRENT): The Bisect Completed - Invert the Gate
+v5 field result: **cutscenes became pillarboxed** and **loading stayed wide**. Combined with v4 this completes a clean A/B bisect:
+
+| Build | Gate | Cutscenes | Loading |
+|---|---|---|---|
+| v4 | whole (1.75, 1.8) window | WIDE | wide |
+| v5 | window minus exact-16/9 | boxed | wide |
+
+Therefore: **cutscene cameras carry exactly the 16/9 float `0x3FE38E39`** (serialized or computed, not the constructor default as guessed), and the loading-hold camera carries a *different* ~1.77 value (the constructor default `0x3FE38E3B` or similar). The v5 exclusion was precisely inverted. v6 flips the gate to unconstrain ONLY exact-16/9 views:
+
+```
+caveA: 0F B6 83 B4 02 00 00            movzx eax, byte [rbx+0x2B4]
+       81 BB B0 02 00 00 39 8E E3 3F   cmp   dword [rbx+0x2B0], 0x3FE38E39
+       75 03                           jne   done
+       83 E0 FE                        and   eax, -2
+done:  C3                              ret
+```
+
+Expected: cutscenes (exact 16/9) -> Hor+ wide; loading (other value) -> constrained pillarbox; exploration (monitor aspect) -> classic; photos -> classic; cave B still forces cine views boxed as second line of defense. Any individual cinematic authored at a different aspect (e.g. 2.39 scope shots) would stay boxed - to be handled per report by adding its exact constant to the gate.
+
 Result matrix:
 - **Cutscenes/dialogues (cine cameras):** unconstrained -> forced MaintainYFOV branch -> true Hor+ with the authored aspect as divisor. Identical rendering to the user-approved v1 cutscenes.
 - **Exploration:** constrained at the patched monitor aspect - identical to the proven classic 2-offset fix.

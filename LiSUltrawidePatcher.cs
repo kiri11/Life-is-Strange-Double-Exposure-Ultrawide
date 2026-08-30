@@ -151,17 +151,15 @@ namespace LiSUltrawidePatcher
         // whose authored AspectRatio lies in (1.75, 1.8) - the 16:9 cutscene
         // cameras. Exploration/photo cameras (patched to the monitor aspect)
         // and square capture cameras are untouched.
+        // Field A/B bisect result: cutscene cameras carry EXACTLY the 16/9
+        // float (0x3FE38E39); the loading-hold camera carries a different
+        // ~1.77 value. Unconstrain only exact-16/9 views.
         private static readonly byte[] CaveAspectGate = new byte[] {
-            0x0F, 0xB6, 0x83, 0xB4, 0x02, 0x00, 0x00,       // movzx eax, byte [rbx+2B4]
-            0x8B, 0x8B, 0xB0, 0x02, 0x00, 0x00,             // mov   ecx, [rbx+2B0]
-            0x81, 0xF9, 0x39, 0x8E, 0xE3, 0x3F,             // cmp   ecx, exact 16/9 (loading views)
-            0x74, 0x13,                                     // je    done (stay constrained)
-            0x81, 0xF9, 0x00, 0x00, 0xE0, 0x3F,             // cmp   ecx, 1.75f
-            0x76, 0x0B,                                     // jbe   done
-            0x81, 0xF9, 0x66, 0x66, 0xE6, 0x3F,             // cmp   ecx, 1.8f
-            0x73, 0x03,                                     // jae   done
-            0x83, 0xE0, 0xFE,                               // and   eax, -2
-            0xC3                                            // done: ret
+            0x0F, 0xB6, 0x83, 0xB4, 0x02, 0x00, 0x00,             // movzx eax, byte [rbx+2B4]
+            0x81, 0xBB, 0xB0, 0x02, 0x00, 0x00, 0x39, 0x8E, 0xE3, 0x3F, // cmp dword [rbx+2B0], exact 16/9
+            0x75, 0x03,                                           // jne  done
+            0x83, 0xE0, 0xFE,                                     // and  eax, -2
+            0xC3                                                  // done: ret
         };
 
         private void ApplyAspectGateCave(byte[] data)
