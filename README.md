@@ -56,8 +56,7 @@ Choose any of the following installation methods:
 If you prefer not to modify your `.exe` file on disk:
 1. Download [SUWSF](https://github.com/PhantomGamers/SUWSF) and place `SUWSF.asi` and `dxgi.dll` in `Chronos/Binaries/Win64/`.
 2. Copy the included **`SUWSF.ini`** into `Chronos/Binaries/Win64/`.
-3. Edit `SUWSF.ini` to set `Resolution="YourResolution"` (e.g. `5120x2160` or `3440x1440`).
-4. Launch the game normally.
+3. Launch the game normally. SUWSF will automatically detect your display resolution and apply the patches in memory at startup.
 
 ### Method 4: Manual Hex Editing (HxD)
 1. Open `Chronos/Binaries/Win64/Chronos-Win64-Shipping.exe` in **HxD**.
