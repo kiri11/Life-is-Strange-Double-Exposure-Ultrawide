@@ -7,32 +7,29 @@ A lightweight, native ultrawide fix for **Life is Strange: Double Exposure** sup
 ## What This Fix Does
 
 - **True Hor+ Ultrawide Cutscenes & Dialogues:** Cinematics render full-width with **0% vertical crop**. The full 16:9 vertical framing (faces, headroom, director composition) is preserved and the horizontal field of view is *expanded* to fill your monitor. No black bars, no cut chins or foreheads.
-- **Proven Classic Behavior Everywhere Else:** Free-roam exploration is full-width ultrawide, Max's Polaroid photos are pixel-perfect, and loading transitions stay covered - identical to the battle-tested classic 2-offset fix.
-- **Fully Static:** 13 patched bytes in the executable. No runtime hooks, no DLL injection, no Lua mods, no background processes, no per-frame overhead.
-- **Legacy Modes Still Available:** Pillarboxed 16:9 cutscenes (previous "clean" mode) and full Vert- ultrawide (previous 11-offset mode) remain selectable.
+- **Ultrawide Free-Roam Exploration:** Full-width rendering during gameplay.
+- **Correct Photo Mechanics:** Max's Polaroid photographs and in-game camera captures retain proper 1:1 proportions without stretching or skewing. The camera UI works unchanged.
+- **No Zoom Bug After Cutscenes:** The engine-level cause of the camera zoom when a cutscene hands control back to the player (Unreal's sequencer can leave the aspect-axis constraint on `MaintainXFOV`) is neutralized at the projection branch.
+- **Fully Static:** A handful of patched bytes in the executable. No runtime hooks, no DLL injection, no Lua mods, no background processes, no performance impact. Behavior-neutral on a 16:9 display.
 
-## Fix Modes
-
-| Mode | Cutscenes | Exploration | Photo mode | Loading |
-| :--- | :--- | :--- | :--- | :--- |
-| **Cine Hor+ (Recommended)** | Hor+ ultrawide, 0% vertical crop | Classic full-width | Classic (photos correct) | Classic (covered) |
-| **True Hor+ Everywhere** (experimental) | Hor+ ultrawide | Hor+ ultrawide | Unconstrained (photos may skew) | Sides visible |
-| **Legacy Clean** | 16:9 pillarbox | Classic full-width | Classic | Classic |
-| **Legacy Full** | Vert- wide (~20% crop) | Classic full-width | Classic | Wide |
+**Known limitation:** during loading transitions, narrow strips of the (still-streaming) world can be visible for a moment at the screen sides. The loading view is the destination scene's own cutscene camera held behind a 16:9-sized loading overlay, so it cannot be pillarboxed without also pillarboxing cutscenes. See "Possible Improvements" below.
 
 ## How It Works (Short Version)
 
-UE5 already contains perfect Hor+ math: in the `MaintainYFOV` projection path it derives the vertical FOV from the aspect ratio the camera was *authored* for (`vFOV = 2*atan(tan(hFOV/2) / authoredAspect)`) and then expands horizontally to the real viewport. Two patched bytes force that branch for every unconstrained camera (behavior-neutral for constrained/pillarboxed views and on 16:9 displays).
+UE5 already contains perfect Hor+ math: in the `MaintainYFOV` projection path it derives the vertical FOV from the aspect ratio the camera was *authored* for (`vFOV = 2*atan(tan(hFOV/2) / authoredAspect)`) and then expands horizontally to the real viewport. The fix:
 
-The key insight enabling the recommended mode: with the classic exploration patch active, the camera views themselves carry a perfect discriminator - cutscene cameras arrive with their authored 16:9 aspect ratio (~1.778), while exploration and photo cameras carry the patched monitor aspect and photo-capture cameras are square. A small code cave in `UCameraComponent::GetCameraView` unconstrains only views authored in the (1.75, 1.8) window (-> Hor+ cutscenes), and a second cave on the unique `UCineCameraComponent` super-call forces the game's cine cameras - which are its loading/transition views - back to constrained 16:9 pillarbox.
+1. Forces that Hor+ projection branch for every unconstrained camera (2 bytes).
+2. Adds a small code cave in `UCameraComponent::GetCameraView` that lifts the 16:9 pillarbox constraint from cameras authored ~16:9 - the cutscene and dialogue cameras - while cameras carrying other aspect ratios (exploration at the patched monitor ratio, square photo-capture cameras) keep their classic behavior.
+3. Adds a second cave on the unique `UCineCameraComponent` super-call that keeps the game's cine-class views (loading/transition holds) constrained.
+4. Patches the classic player-camera and photo-table aspect constants to your monitor's ratio.
 
-See [RESEARCH.md](RESEARCH.md) for the full breakdown.
+See [RESEARCH.md](RESEARCH.md) for the complete technical breakdown.
 
 ---
 
 ## Supported Resolutions
 
-Any resolution is supported. The aspect value below is only used for the photo projection table (and by the legacy modes):
+Any resolution is supported; presets:
 
 | Resolution | Aspect Ratio | Hex Replacement Value |
 | :--- | :--- | :--- |
@@ -49,98 +46,65 @@ Any resolution is supported. The aspect value below is only used for the photo p
 
 ---
 
-## Installation Methods
+## Installation
 
-Choose any of the following installation methods:
+Choose either method. Both create an automatic `.original` backup before patching and can restore it at any time.
 
-### Method 1: Windows GUI Patcher (Recommended for Windows)
+### Method 1: Windows GUI Patcher
 1. Run **`LiSUltrawidePatcher.exe`**.
-2. The tool will auto-detect your game executable and display resolution.
-3. Choose your **Framing Mode** (True Hor+ Ultrawide is recommended).
-4. Click **Patch Game Executable**.
-5. Launch the game through Steam.
-
-*(An automatic `.original` backup is created before patching. You can click **Restore Original Stock** at any time).*
+2. The tool auto-detects your game executable and display resolution.
+3. Keep the recommended mode selected and click **Patch Game Executable**.
+4. Launch the game through Steam.
 
 ### Method 2: Python Script (Steam Deck / Linux / Proton / macOS / Windows)
-1. Open a terminal in the folder and run:
-   ```bash
-   python patcher.py
-   ```
-2. Select your resolution preset and framing mode.
+```bash
+python patcher.py --mode cine --width 5120 --height 2160
+```
+Or run `python patcher.py` without arguments for interactive prompts. Restore with:
+```bash
+python patcher.py --mode stock
+```
 
-Non-interactive usage:
-   ```bash
-   python patcher.py --mode cine --width 5120 --height 2160
-   python patcher.py --mode stock
-   ```
+**Requirements:** Python 3.6+, standard library only.
 
-**Requirements:** Python 3.6+ using built-in standard libraries only. Zero external dependencies (`pip`) required.
-
-### Method 3: In-Memory Patching via SUWSF (No File Modifications)
-If you prefer not to modify your `.exe` file on disk:
-1. Download [SUWSF](https://github.com/PhantomGamers/SUWSF/releases) and place `SUWSF.asi` and `dxgi.dll` in `Chronos/Binaries/Win64/`.
-2. Copy the included **`SUWSF.ini`** (True Hor+ configuration) into `Chronos/Binaries/Win64/`.
-3. Launch the game normally. SUWSF will automatically detect your display resolution and apply the patches in memory at startup.
-
-Do not combine Method 3 with a patched executable; the patchers automatically disable `SUWSF.ini` when they patch the exe.
-
-### Method 4: Manual Hex Editing (HxD)
-
-Open `Chronos/Binaries/Win64/Chronos-Win64-Shipping.exe` in [HxD](https://mh-nexus.de/en/hxd/) (or any hex editor).
-
-**Cine Hor+ Mode (recommended)** - use `patcher.py` or the GUI for this mode. It applies the static edits below **plus two small code caves** (33 + 18 bytes written into `int3` padding) whose relative addresses are computed at patch time, so it is impractical to apply by hand:
-
-| File Offset | Original Bytes | New Bytes | Purpose |
-| :--- | :--- | :--- | :--- |
-| `0x23E665C` | `3B 8E E3 3F` | *your aspect hex* | Player exploration camera (classic) |
-| `0x69C8A8C` | `39 8E E3 3F` | *your aspect hex* | Photo projection table (classic) |
-| `0x440ABC6` | `02` | `FF` | Disable `MajorAxisFOV` Vert- branch |
-| `0x440ABCF` | `01` | `FF` | Disable `MaintainXFOV` Vert- branch (forces Hor+ `MaintainYFOV`) |
-| `0x441A14C` + cave A | `0F B6 83 B4 02 00 00` | `call caveA` + nop | Unconstrain only cameras authored 16:9 (cutscenes -> Hor+) |
-| `0x4005B87` + cave B | (dynamic) | (dynamic) | Force cine (loading/transition) views back to 16:9 pillarbox |
-
-**True Hor+ Everywhere Mode (experimental)** - 4 edits, starting from a stock executable:
-
-| File Offset | Original Bytes | New Bytes | Purpose |
-| :--- | :--- | :--- | :--- |
-| `0x441A14C` | `0F B6 83 B4 02 00 00` | `31 C0 0F 1F 44 00 00` | Unconstrain all cameras (`bConstrainAspectRatio=false`) |
-| `0x440ABC6` | `02` | `FF` | Disable `MajorAxisFOV` Vert- branch |
-| `0x440ABCF` | `01` | `FF` | Disable `MaintainXFOV` Vert- branch (forces Hor+ `MaintainYFOV`) |
-| `0x69C8A8C` | `39 8E E3 3F` | *your aspect hex* | Photo projection table |
-
-Important: in Hor+ mode, offset `0x23E665C` must remain at its stock value `3B 8E E3 3F`. The engine divides by this authored aspect ratio to compute the preserved vertical FOV; writing your monitor ratio here re-introduces vertical cropping.
-
-**Legacy Clean Mode** - 2 edits:
-   - `0x23E665C` (Player Exploration Camera) -> Replace `3B 8E E3 3F` with your resolution hex (e.g. `26 B4 17 40`).
-   - `0x69C8A8C` (Photo Projection Table) -> Replace `39 8E E3 3F` with your resolution hex (e.g. `26 B4 17 40`).
+Manual hex editing is not practical for this fix: besides four static byte edits, it writes two code caves into `int3` padding whose relative addresses are computed at patch time. In-memory patchers (SUWSF and similar) cannot express the caves either - use the bundled patchers.
 
 ---
 
 ## Optional Engine.ini Tweaks
 
-Not required for the fix, but recommended at ultrawide resolutions. Add to `%localappdata%\Chronos\Saved\Config\Windows\Engine.ini`:
+Not required, but recommended at ultrawide resolutions. Add to `%localappdata%\Chronos\Saved\Config\Windows\Engine.ini`:
 
 ```ini
 [SystemSettings]
 ; Reduce strong chromatic aberration at the expanded screen edges
 r.SceneColorFringeQuality=0
+; Optional: faster texture/level streaming reduces visible pop-in at the
+; screen sides during loading transitions
+r.Streaming.PoolSize=4096
+r.Streaming.FramesForFullUpdate=1
 ```
+
+---
+
+## Possible Improvements
+
+- **Loading side-peek:** candidate solutions (streaming tuning, loading-overlay widget fix, a minimal runtime load-window mask) are analyzed in RESEARCH.md section 5. The overlay asset route is currently blocked by the game's encrypted IoStore index.
+- **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside the (1.75, 1.8) gate window; the gate can be extended per report.
 
 ---
 
 ## Troubleshooting
 
-- **Photos look skewed:** use Cine Hor+ (or a legacy) mode - the photo pipeline there is identical to the proven classic fix. (In the experimental "everywhere" mode the photo camera runs unconstrained; that is a known limitation.)
-- **A cutscene still shows black bars:** a few cinematics may draw letterbox bars as UI widgets rather than camera constraints, or use a non-cinematic camera class; report which scene, these can be addressed separately.
-- **Vertical framing steps down when a cutscene ends:** in Cine Hor+ mode cutscenes show the full 16:9 vertical image while exploration uses the classic full-width (vertically tighter) framing, so a hard cut between them shifts vertical FOV. Inherent to combining Hor+ cinematics with the classic exploration camera.
+- **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
 - **Everything looks wrong after a game update:** the patchers locate all code sites by unique byte signatures and will report if the game version is unsupported; re-run the patcher after updates.
+- **Restore stock:** GUI "Restore Original Stock" button, or `python patcher.py --mode stock`.
 
 ---
 
 ## Technical Documentation & Research
 
-For the full reverse-engineering breakdown, Unreal Engine 5 projection matrix analysis, the Hor+ discovery, the cutscene zoom-bug root cause, complete disassembly maps, and dead-end analyses, see **[RESEARCH.md](RESEARCH.md)**.
+For the reverse-engineering breakdown, Unreal Engine 5 projection matrix analysis, disassembly of the patched sites, the loading-transition analysis, and dead ends explored, see **[RESEARCH.md](RESEARCH.md)**. Historical iterations of this fix are preserved in git history.
 
 ---
 
