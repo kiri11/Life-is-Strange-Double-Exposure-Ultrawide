@@ -54,6 +54,14 @@ Both methods run the same code - the GUI is a thin front-end over `patcher.py`, 
 2. It detects your game and display automatically.
 3. Leave all four options ticked and click **Install**.
 
+**You do not need Python installed.** The GUI looks for `uv`, then `py`, then `python`. If none is present - or if the full-width UI option is ticked and `uv` is missing, since that step needs the `blake3` package - it offers to run uv's official installer for you:
+
+```
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+It always asks first and shows the exact command. The installer is per-user, needs no administrator rights, and `uv` then fetches a Python interpreter and `blake3` by itself - so accepting once makes everything work on a machine with no Python at all. Declining just falls back to whatever Python you already have.
+
 ### Method 2: Command line (Windows / Steam Deck / Linux / Proton / macOS)
 
 ```bash
@@ -74,7 +82,7 @@ python patcher.py --width 5120 --height 2160 --yes
 python patcher.py --restore
 ```
 
-**Requirements:** Python 3.6+ (3.8+ under `uv`). The full-width UI step additionally needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor DLL, which cannot be redistributed - see [tools/assetdump/README.md](tools/assetdump/README.md). If either is missing, that one step is skipped and reported; everything else still installs.
+**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step additionally needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor DLL, which cannot be redistributed - see [tools/assetdump/README.md](tools/assetdump/README.md). If either is missing, that one step is skipped and reported; everything else still installs.
 
 ### What each option does
 
