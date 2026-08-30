@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["blake3"]
+# ///
 """
-Life is Strange: Double Exposure - Native Ultrawide & Cutscene Aspect Patcher
-Supports 21:9, 32:9, 32:10, 16:10, custom resolutions, and cutscene framing modes.
-Compatible with Python 3.6+
+Life is Strange: Double Exposure - Ultrawide Fix installer.
 
-Modes:
-  horplus - True Hor+ ultrawide everywhere (exploration + cutscenes + dialogues).
-            Zero vertical crop: keeps the full 16:9 vertical framing and expands
-            the horizontal field of view to fill the monitor. Also removes the
-            zoom-in jump when a cutscene hands control back to the player.
-  clean   - Legacy: ultrawide exploration (Vert-) + pillarboxed 16:9 cutscenes.
-  full    - Legacy: all 11 aspect constants patched (Vert- ~20% vertical crop).
-  stock   - Restore the original 16:9 executable.
+Run it with no arguments for an interactive install, or:
+
+    uv run patcher.py --yes            # everything, auto-detected resolution
+    python patcher.py --width 5120 --height 2160 --yes
+    python patcher.py --restore        # undo everything
+
+Four independent parts, all on by default:
+
+  1. Ultrawide camera   - patches the executable (see RESEARCH.md)
+  2. Full-width UI      - patches the game data files via tools/assetdump
+  3. Chromatic aberration off } both write a single managed block into the
+  4. Anti-blur TSR settings   } user's Engine.ini, removed again by --restore
+
+`uv run` is the easiest entry point: it needs no venv and fetches the one
+optional dependency (blake3, used only by part 2) automatically.
+
+Advanced: --mode patches only the executable, in one of the legacy modes
+(cine, horplus, hybrid, clean, full, stock). cine is the shipped behaviour.
+Compatible with Python 3.6+ (3.8+ under uv).
 """
 
 import argparse
+import io
 import os
 import re
 import shutil
@@ -474,72 +488,390 @@ def patch_exe(exe_path, width, height, mode, gate_upper_aspect=None):
 # CLI / interactive
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Display detection
+# ---------------------------------------------------------------------------
+
+def detect_resolution():
+    """-> (w, h) of the primary display, or None."""
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        try:
+            u.SetProcessDPIAware()
+        except Exception:
+            pass
+        w, h = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    try:                                               # Linux / Proton
+        import subprocess
+        out = subprocess.check_output(["xrandr"], stderr=subprocess.DEVNULL)
+        m = re.search(br"current (\d+) x (\d+)", out)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Engine.ini tweaks
+# ---------------------------------------------------------------------------
+
+INI_BEGIN = "; ===== BEGIN LiS:DE Ultrawide Fix (managed block - safe to delete) ====="
+INI_END = "; ===== END LiS:DE Ultrawide Fix ====="
+
+
+def engine_ini_path():
+    """Locate the user's Engine.ini (native Windows first, then a Proton prefix)."""
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        p = os.path.join(base, "Chronos", "Saved", "Config", "Windows", "Engine.ini")
+        if os.path.isdir(os.path.dirname(p)):
+            return p
+    import glob
+    home = os.path.expanduser("~")
+    for root in (os.path.join(home, ".steam", "steam"),
+                 os.path.join(home, ".local", "share", "Steam")):
+        hits = glob.glob(os.path.join(
+            root, "steamapps", "compatdata", "*", "pfx", "drive_c", "users",
+            "steamuser", "AppData", "Local", "Chronos", "Saved", "Config",
+            "Windows", "Engine.ini"))
+        if hits:
+            return hits[0]
+    if base:
+        return os.path.join(base, "Chronos", "Saved", "Config", "Windows", "Engine.ini")
+    return None
+
+
+def tsr_settings(width, height):
+    """Recommended TSR values for this resolution.
+
+    TSR - UE5's temporal upscaler - is what makes this game look soft. The two
+    settings that matter most are rendering at 100% of the output resolution
+    rather than upscaling from a lower one, and giving TSR a history buffer
+    above output resolution to resolve detail from. The history multiplier is
+    the expensive one, so it is scaled back at very high pixel counts.
+
+    These are a sane starting point, not gospel - every line is a normal UE
+    console variable and can be edited in Engine.ini afterwards.
+    """
+    megapixels = (width * height) / 1e6
+    if megapixels < 8.0:            # up to ~3840x1600 / 3440x1440
+        history, sharpen = 200, 0.5
+    else:                           # 5120x2160, 7680x2160, ...
+        history, sharpen = 150, 0.7
+    return [
+        (None, "Render at 100% of the output resolution instead of upscaling from lower"),
+        ("r.ScreenPercentage", 100),
+        (None, "Highest temporal-upsampler quality"),
+        ("r.PostProcessAAQuality", 6),
+        (None, "TSR history buffer above output resolution - the main anti-blur knob"),
+        (None, "200 = sharpest, 100 = cheapest; %.1f MP here" % megapixels),
+        ("r.TSR.History.ScreenPercentage", history),
+        (None, "Mild output sharpening to counter the temporal filter"),
+        ("r.Tonemapper.Sharpen", sharpen),
+        (None, "Slightly sharper texture mips"),
+        ("r.MipMapLODBias", -0.5),
+    ]
+
+
+def build_ini_block(width, height, chromatic, sharpness):
+    lines = [INI_BEGIN, "[SystemSettings]"]
+    if chromatic:
+        lines.append("; Chromatic aberration is far more obvious at the widened screen edges")
+        lines.append("r.SceneColorFringeQuality=0")
+    if sharpness:
+        if chromatic:
+            lines.append("")
+        for key, val in tsr_settings(width, height):
+            lines.append("; " + val if key is None else "%s=%s" % (key, val))
+    lines.append(INI_END)
+    return "\n".join(lines) + "\n"
+
+
+def strip_ini_block(text):
+    """Remove a previously written managed block, so re-runs never stack."""
+    out, skipping = [], False
+    for line in text.splitlines(True):
+        if line.strip() == INI_BEGIN:
+            skipping = True
+            # also drop the single blank separator line we insert before it,
+            # so removing the block restores the file byte-for-byte
+            if out and not out[-1].strip():
+                out.pop()
+            continue
+        if skipping:
+            if line.strip() == INI_END:
+                skipping = False
+            continue
+        out.append(line)
+    return "".join(out)
+
+
+def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
+    path = engine_ini_path()
+    if not path:
+        print("  !! could not locate Engine.ini - skipping the display tweaks")
+        return False
+    old = ""
+    if os.path.isfile(path):
+        with io.open(path, encoding="utf-8", errors="replace") as f:
+            old = f.read()
+    new = strip_ini_block(old)
+    if not remove:
+        if new and not new.endswith("\n"):
+            new += "\n"
+        new += ("\n" if new.strip() else "") + build_ini_block(
+            width, height, chromatic, sharpness)
+    if new == old:
+        print("  already up to date: {}".format(path))
+        return True
+    parent = os.path.dirname(path)
+    if not os.path.isdir(parent):
+        os.makedirs(parent)
+    with io.open(path, "w", encoding="utf-8") as f:
+        f.write(new)
+    print("  {} {}".format("removed the managed block from" if remove else "wrote", path))
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Game-file (UI layout) patch - delegates to tools/assetdump/patch_ui_layout.py
+# ---------------------------------------------------------------------------
+
+def paks_dir_for(exe_path):
+    """<game>/Chronos/Binaries/Win64/x.exe -> <game>/Chronos/Content/Paks"""
+    win64 = os.path.dirname(os.path.abspath(exe_path))
+    chronos = os.path.dirname(os.path.dirname(win64))
+    return os.path.join(chronos, "Content", "Paks")
+
+
+def oodle_present():
+    here = os.path.dirname(os.path.abspath(__file__))
+    names = ("oodle-data-shared.dll", "oo2core_9_win64.dll", "liboodle-data-shared.so")
+    return any(os.path.isfile(os.path.join(here, "tools", "assetdump", n))
+               or os.path.isfile(os.path.join(here, n)) for n in names)
+
+
+def game_files_requirements():
+    """-> (ok, [missing]) for the UI-layout patch's extra dependencies."""
+    missing = []
+    try:
+        import blake3  # noqa: F401
+    except ImportError:
+        missing.append("the 'blake3' module - run this installer with "
+                       "'uv run patcher.py' and it is fetched automatically, "
+                       "or 'pip install blake3'")
+    if not oodle_present():
+        missing.append("an Oodle decompressor DLL in tools/assetdump/ "
+                       "(see tools/assetdump/README.md - it cannot be redistributed)")
+    return (not missing), missing
+
+
+def apply_game_files(exe_path, width, height, restore=False):
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(here, "tools", "assetdump", "patch_ui_layout.py")
+    if not os.path.isfile(script):
+        print("  !! {} not found - skipping".format(script))
+        return False
+    cmd = [sys.executable, script, "--paks", paks_dir_for(exe_path)]
+    cmd += ["--restore"] if restore else ["--width", str(width), "--height", str(height)]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out, _ = proc.communicate()
+    except Exception as ex:
+        print("  !! could not run the UI-layout patcher: {}".format(ex))
+        return False
+    for line in out.decode("utf-8", "replace").splitlines():
+        print("  | " + line)
+    return proc.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Installer
+# ---------------------------------------------------------------------------
+
+def ask_yes(prompt, default=True):
+    try:
+        answer = input(prompt + (" [Y/n]: " if default else " [y/N]: ")).strip().lower()
+    except EOFError:
+        return default
+    return default if not answer else answer.startswith("y")
+
+
+def choose_resolution(detected):
+    print("\nSelect your display resolution:")
+    for k in sorted(PRESETS):
+        name, w, h = PRESETS[k]
+        print("  [{}] {}{}".format(k, name,
+                                   "   <- detected" if detected == (w, h) else ""))
+    print("  [C] Custom")
+    if detected:
+        print("\n  Detected display: {}x{}".format(*detected))
+        prompt = "Enter choice [1-8, C, or Enter for the detected resolution]: "
+    else:
+        prompt = "Enter choice [1-8 or C]: "
+    try:
+        choice = input("\n" + prompt).strip().upper()
+    except EOFError:
+        choice = ""
+    if not choice and detected:
+        return detected
+    if choice in PRESETS:
+        return PRESETS[choice][1], PRESETS[choice][2]
+    if choice == "C":
+        return int(input("Width: ").strip()), int(input("Height: ").strip())
+    if detected:
+        print("Unrecognised choice - using the detected resolution.")
+        return detected
+    raise SystemExit("No resolution selected.")
+
+
+def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
+                do_sharpen, restore=False):
+    if restore:
+        print("\nRestoring everything to stock...")
+        patch_exe(exe_path, 16, 9, "stock")
+        apply_game_files(exe_path, width, height, restore=True)
+        apply_engine_ini(width, height, False, False, remove=True)
+        print("\nDone - the game is back to its shipped state.")
+        return True
+
+    ok = True
+    print("\nInstalling for {}x{} ({:.4f}:1)".format(
+        width, height, width / float(height)))
+
+    print("\n[1/3] Ultrawide camera (executable)")
+    if do_exe:
+        patch_exe(exe_path, width, height, "cine")
+    else:
+        print("  skipped")
+
+    print("\n[2/3] Full-width UI (game files)")
+    if do_files:
+        good, missing = game_files_requirements()
+        if good:
+            ok = apply_game_files(exe_path, width, height) and ok
+        else:
+            print("  !! skipped - this step also needs:")
+            for m in missing:
+                print("       - " + m)
+            print("     Everything else was still applied.")
+            ok = False
+    else:
+        print("  skipped")
+
+    print("\n[3/3] Display tweaks (Engine.ini)")
+    if do_chromatic or do_sharpen:
+        apply_engine_ini(width, height, do_chromatic, do_sharpen)
+    else:
+        print("  skipped")
+
+    print("\n" + "=" * 60)
+    print(" Done." if ok else " Done - one step was skipped, see above.")
+    print(" Launch the game through Steam.")
+    print("=" * 60)
+    return ok
+
+
 def main():
-    parser = argparse.ArgumentParser(description="LiS: Double Exposure ultrawide patcher")
+    parser = argparse.ArgumentParser(
+        description="Life is Strange: Double Exposure - ultrawide installer")
     parser.add_argument("--exe", help="path to Chronos-Win64-Shipping.exe")
-    parser.add_argument("--mode", choices=["cine", "horplus", "hybrid", "clean", "full", "stock"],
-                        help="patch mode (skips interactive prompts)")
+    parser.add_argument("--width", type=int, help="display width, e.g. 5120")
+    parser.add_argument("--height", type=int, help="display height, e.g. 2160")
+    parser.add_argument("--restore", action="store_true",
+                        help="undo everything this installer applied")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="accept all defaults, no prompts")
+    parser.add_argument("--no-exe", action="store_true",
+                        help="skip the ultrawide camera patch (the executable)")
+    parser.add_argument("--no-game-files", action="store_true",
+                        help="skip the full-width UI patch (the game data files)")
+    parser.add_argument("--no-chromatic-fix", action="store_true",
+                        help="skip disabling chromatic aberration")
+    parser.add_argument("--no-sharpen", action="store_true",
+                        help="skip the recommended anti-blur TSR settings")
+    parser.add_argument("--mode", choices=["cine", "horplus", "hybrid", "clean",
+                                           "full", "stock"],
+                        help="advanced: patch only the executable, in a given mode")
     parser.add_argument("--gate-upper", type=float, metavar="ASPECT",
-                        help="experimental: explicit cave A upper bound (use your "
-                             "DISPLAY aspect when --width/--height patch a different "
-                             "ratio, e.g. --gate-upper 2.3703704)")
-    parser.add_argument("--width", type=int, help="target width, e.g. 5120")
-    parser.add_argument("--height", type=int, help="target height, e.g. 2160")
+                        help="advanced: explicit cave A upper bound")
     args = parser.parse_args()
 
     print("=" * 60)
-    print(" Life is Strange: Double Exposure - Ultrawide Patcher")
+    print(" Life is Strange: Double Exposure - Ultrawide Fix")
     print("=" * 60)
 
     exe_path = args.exe or find_exe()
     if not exe_path:
         exe_path = input("Enter path to Chronos-Win64-Shipping.exe: ").strip(" \"'")
     if not os.path.isfile(exe_path):
-        print("Error: Could not find file at '{}'".format(exe_path))
+        print("Error: could not find file at '{}'".format(exe_path))
         sys.exit(1)
-    print("Found game executable: {}\n".format(exe_path))
+    print("Game executable: {}".format(exe_path))
 
+    # advanced escape hatch: executable only, explicit mode
     if args.mode:
-        if args.mode not in ("stock", "hybrid") and not (args.width and args.height):
+        if args.mode != "stock" and not (args.width and args.height):
             print("Error: --mode {} requires --width and --height".format(args.mode))
             sys.exit(1)
         patch_exe(exe_path, args.width or 16, args.height or 9, args.mode,
                   gate_upper_aspect=args.gate_upper)
         return
 
-    print("Select target aspect ratio:")
-    for k in sorted(PRESETS):
-        print("  [{}] {}".format(k, PRESETS[k][0]))
-    print("  [C] Custom Resolution")
-    print("  [R] Restore Original Stock (16:9)")
-
-    choice = input("\nEnter choice [1-8, C or R]: ").strip().upper()
-    if choice == "R":
-        patch_exe(exe_path, 16, 9, "stock")
-        return
-    if choice in PRESETS:
-        _, w, h = PRESETS[choice]
-    elif choice == "C":
-        w = int(input("Enter Width (e.g. 5120): ").strip())
-        h = int(input("Enter Height (e.g. 2160): ").strip())
+    detected = detect_resolution()
+    if args.width and args.height:
+        width, height = args.width, args.height
+    elif args.restore:
+        width, height = detected or (1920, 1080)   # irrelevant when restoring
+    elif args.yes:
+        if not detected:
+            print("Error: could not detect the display - pass --width and --height")
+            sys.exit(1)
+        width, height = detected
+        print("Display: {}x{} (detected)".format(width, height))
     else:
-        print("Invalid resolution option.")
+        width, height = choose_resolution(detected)
+
+    if args.restore:
+        run_install(exe_path, width, height, False, False, False, False, restore=True)
         return
 
-    print("\nSelect Mode:")
-    print("  [1] Recommended: Hor+ Cutscenes + Classic Ultrawide Exploration")
-    print("      Cutscenes and dialogues render true Hor+ ultrawide (full 16:9")
-    print("      vertical framing + expanded sides, no black bars). Exploration,")
-    print("      photos and loading behave exactly like the proven classic fix.")
-    print("  [2] True Hor+ Ultrawide Everywhere (experimental)")
-    print("      Hor+ for every camera, but photo mode and loading views are")
-    print("      unconstrained too (photos may skew, loading pop-in visible).")
-    print("  [3] Legacy: Uncropped 16:9 Cutscenes (pillarboxed cinematics)")
-    print("  [4] Legacy: Full Ultrawide, Vert- (~20% vertical crop in cutscenes)")
+    do_exe = not args.no_exe
+    do_files = not args.no_game_files
+    do_chromatic = not args.no_chromatic_fix
+    do_sharpen = not args.no_sharpen
 
-    cm_choice = input("\nEnter choice [1-4, default 1]: ").strip()
-    mode = {"2": "horplus", "3": "clean", "4": "full"}.get(cm_choice, "cine")
-    patch_exe(exe_path, w, h, mode)
+    if not args.yes:
+        print("\nWhat to install (all four are recommended):")
+        do_exe = ask_yes(
+            "\n  Ultrawide camera - Hor+ cutscenes, dialogue and exploration with no\n"
+            "  black bars and no zoom when a dialogue ends. Patches the executable.",
+            do_exe)
+        do_files = ask_yes(
+            "\n  Full-width UI - loading screens cover the whole screen and the HUD\n"
+            "  sits on the real screen edge. Patches the game's data files.",
+            do_files)
+        do_chromatic = ask_yes(
+            "\n  Disable chromatic aberration - removes the colour fringing that is\n"
+            "  most visible at the widened edges. Writes Engine.ini.",
+            do_chromatic)
+        do_sharpen = ask_yes(
+            "\n  Reduce blurriness - recommended TSR settings for this resolution.\n"
+            "  Writes Engine.ini.",
+            do_sharpen)
+
+    if not any((do_exe, do_files, do_chromatic, do_sharpen)):
+        print("\nNothing selected - exiting.")
+        return
+
+    run_install(exe_path, width, height, do_exe, do_files, do_chromatic, do_sharpen)
 
 
 if __name__ == "__main__":

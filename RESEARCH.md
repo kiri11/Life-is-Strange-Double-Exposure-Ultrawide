@@ -11,36 +11,36 @@ Historical iterations of this fix (legacy patch modes, rejected approaches, inte
 
 ## 1. The Current Solution
 
-Six patches (four static edits + two code caves), applied by `patcher.py --mode cine` or the GUI patcher. All code sites are located by unique byte signatures with the documented file offsets as fast paths, so the patch survives game updates that shift offsets (it aborts cleanly if a signature disappears).
+Three code changes (one 2-byte branch edit + two code caves) and **no aspect-ratio constants**, applied by `patcher.py` or the GUI. All code sites are located by unique byte signatures with the documented file offsets as fast paths, so the patch survives game updates that shift offsets (it aborts cleanly if a signature disappears).
 
 ```
 Target File: Chronos/Binaries/Win64/Chronos-Win64-Shipping.exe
 ------------------------------------------------------------------------------
-0x23E665C: 3B 8E E3 3F -> monitor aspect    player/exploration camera class
-                                            constructor AspectRatio constant
-0x69C8A8C: 39 8E E3 3F -> monitor aspect    static photo projection table
 0x440ABC6: 02 -> FF                         disable MajorAxisFOV branch
 0x440ABCF: 01 -> FF                         disable MaintainXFOV branch
                                             (forces the Hor+ MaintainYFOV path)
-0x441A14C: movzx -> call caveA + 2-byte nop aspect-gated unconstrain
+0x441A14C: movzx -> call caveA + 2-byte nop aspect-gated unconstrain + divisor pin
 0x4005B87: call displacement -> caveB       cine (loading) views kept boxed
-caveA (33 bytes), caveB (18 bytes):         written into int3 padding; located
+caveA (40 bytes), caveB (18 bytes):         written into int3 padding; located
                                             and linked at patch time
 ------------------------------------------------------------------------------
 ```
 
-Result matrix (field-verified):
+Result matrix (field-verified at 5120x2160):
 
 | Surface | Behavior |
 |---|---|
 | Cutscenes & dialogues | Full-width Hor+, 0% vertical crop |
-| Free-roam exploration | Full-width (constrained at monitor aspect) |
-| Photo mode / Polaroids | Correct proportions, unchanged camera UI |
+| Free-roam exploration | Full-width Hor+, 0% vertical crop |
+| Dialogue / cutscene hand-off | Seamless - no pillarbox sweep, no zoom, no snap |
+| Photo mode / Polaroids | Correct proportions; pipeline bit-identical to vanilla |
 | Main menu | Full-width Hor+ |
-| Loading transitions | Known limitation: brief side-peek (section 5) |
+| Loading transitions | Overlay covers the full screen (with the UI patch, section 9) |
 | 16:9 displays | Behavior-neutral |
 
-`Engine.ini` is not required. Optional tweaks (chromatic aberration, streaming) are listed in the README.
+**Superseded in v9.** Earlier releases also wrote the monitor aspect into two float constants - the player-camera constructor default at `0x23E665C` and the photo projection table at `0x69C8A8C`. Runtime measurement (section 10) showed they never governed what they were believed to: free-roam already renders Hor+ through cave A, and the photo pipeline is correct precisely *because* both constants keep their shipped 16:9 values. Patching them only desynchronised the dialogue hand-off. They are now left stock, and the patch is smaller for it.
+
+`Engine.ini` is not required for the camera fix. The installer can optionally write chromatic-aberration and anti-blur TSR settings; see the README.
 
 ---
 
@@ -97,22 +97,32 @@ This also fixes the **post-cutscene zoom bug** at its root: `ULevelSequencePlaye
 0x441A159: 31 47 4C               xor   [rdi+0x4C], eax
 ```
 
+Critically, the component's `AspectRatio` is copied into the output view in the two instructions *immediately before* the patched site, so inside the cave `rdi` already points at a view whose aspect can be rewritten:
+
+```
+0x441A143: 8B 83 B0 02 00 00      mov   eax, [rbx+0x2B0]        ; component AspectRatio
+0x441A149: 89 47 48               mov   [rdi+0x48], eax         ; view.AspectRatio = it
+```
+
 The 7-byte `movzx` becomes `call caveA` + 2-byte nop:
 
 ```
 caveA: 0F B6 83 B4 02 00 00   movzx eax, byte [rbx+0x2B4]   ; original instruction
        8B 8B B0 02 00 00      mov   ecx, [rbx+0x2B0]        ; component AspectRatio
        81 F9 00 00 E0 3F      cmp   ecx, 1.75f              ; IEEE754 order == integer order
-       76 0B                  jbe   done
-       81 F9 66 66 E6 3F      cmp   ecx, 1.8f
-       73 03                  jae   done
+       76 12                  jbe   done
+       81 F9 <display*1.002>  cmp   ecx, upper bound
+       73 0A                  jae   done
        83 E0 FE               and   eax, -2                 ; clear bConstrainAspectRatio
+       C7 47 48 39 8E E3 3F   mov   dword [rdi+0x48], 1.7777778f   ; pin the divisor
 done:  C3                     ret
 ```
 
-Cameras authored ~16:9 (the cutscene, dialogue and menu cameras) are unconstrained and render Hor+; cameras carrying the patched monitor aspect (exploration, photo view - via the `0x23E665C` constant) and square capture cameras (~1.0) keep their constraint and classic behavior. `ecx` is reloaded immediately after the patched site, so nothing is clobbered; the cave uses no stack and needs no alignment.
+Every camera authored **narrower than the display** is unconstrained and renders Hor+ - the cutscene, dialogue, menu and free-roam cameras alike. Square capture cameras (~1.0) fall below the window and keep their constraint and classic behaviour, which is what protects the photo pipeline. `ecx` is reloaded immediately after the patched site, so nothing is clobbered; the cave uses no stack and needs no alignment.
 
-Because `FMinimalViewInfo::BlendViewInfo` propagates the flag with `|=`, views blended from unconstrained sources stay unconstrained through cutscene-to-gameplay transitions.
+**The divisor pin is the part that matters most**, and it is not obvious from static reading. The game *animates* a camera's `AspectRatio` from the authored 16:9 up to the viewport aspect when it hands control back from a dialogue - its letterbox-open animation. Under the forced `MaintainYFOV` branch that member is the FOV divisor, so without the pin the animation is re-read as a vertical-FOV change: a zoom-in while the ramp climbs, a pillarbox sweep if the ramp leaves the gate window, and a framing snap when the gameplay camera takes over. Writing the authored aspect back into `[rdi+0x48]` restores the rule from 2a - the divisor must be the aspect the FOV was authored for. Full measurements in section 10.
+
+The gate's upper bound is `display aspect * 1.002` rather than the display aspect exactly, so the ramp's endpoint stays inside the window despite float rounding and any easing overshoot.
 
 ### 2d. Cave B: Cine Views Kept Boxed - `0x4005B86`
 In this game `UCineCameraComponent` drives **loading/transition views**, not cutscenes (Deck Nine's cutscene cameras are their own component classes - see 3c). Cine sensors are 16:9, so cave A would unconstrain them; cave B overrides that. The entire binary contains exactly **one direct call** to `UCameraComponent::GetCameraView`: the `Super::GetCameraView` call inside `UCineCameraComponent::GetCameraView`:
@@ -143,7 +153,9 @@ Both caves are written into `int3` inter-function padding runs in `.text` (first
 
 ## 3. Binary Reference Map
 
-### 3a. Patched Constants and Functions
+### 3a. Patched Sites and Reference Functions
+
+The first two rows are **no longer patched** as of v9 (see 1 and 4); they are kept here because they remain useful landmarks.
 
 | File Offset | VA | What |
 |---|---|---|
@@ -164,7 +176,7 @@ The binary uses two distinct "16:9" floats one bit apart - relevant when compari
 - `0x3FE38E3B` (`3B 8E E3 3F`, 1.7777779f) - camera-component constructor default;
 - `0x3FE38E39` (`39 8E E3 3F`, 1.7777778f, closest float to 16/9) - `ACineCameraActor` constructor, the photo table, computed filmback ratios, and (field-verified) the cutscene cameras' serialized aspect.
 
-Monitor-aspect replacement values:
+Monitor-aspect values, retained for the legacy `clean`/`full` modes and because cave A's gate bound is derived from the same ratio:
 
 | Resolution | Decimal | Hex (LE) |
 |---|---|---|
@@ -181,7 +193,9 @@ The game does not use Sequencer CineCameras for cutscenes. Native classes found 
 
 ## 4. The Photo Pipeline
 
-UE compiles a static projection float table at `0x69C8A8C` (`DF 7C DB 3D 55 55 55 3F 39 8E E3 3F`, where the last dword is the 16:9 aspect). The photo render matrix samples this table rather than the live viewport. Patching the table's aspect to the monitor ratio, together with the exploration camera constant `0x23E665C` at the same ratio, keeps Max's Polaroids and the in-game photo mechanics 1:1 and unskewed. Both constants must carry the same value - the photo view and the capture matrix have to agree.
+UE compiles a static projection float table at `0x69C8A8C` (`DF 7C DB 3D 55 55 55 3F 39 8E E3 3F`, where the last dword is the 16:9 aspect). The photo render matrix samples this table rather than the live viewport.
+
+**Corrected in v9.** Earlier releases patched this table's aspect to the monitor ratio, together with the player-camera constant at `0x23E665C`, on the reasoning that the photo view and the capture matrix have to agree. Both are now left **stock**, and the photo pipeline is correct precisely because of it: the capture matrix stays bit-identical to vanilla, and the square capture cameras (~1.0) sit below cave A's gate so they keep their constraint and classic projection. Field-verified - Polaroids and the in-game camera behave normally with both constants untouched. See section 10 for the measurements that overturned the original reasoning.
 
 ---
 
@@ -213,7 +227,9 @@ During loading transitions, narrow strips of the still-streaming world can appea
 6. **C++ constructor-default patches for camera behavior** (CDO FOV values, `UCineCameraComponent::bConstrainAspectRatio` default): unreliable - cooked asset delta-serialization and Deck Nine's per-frame Blueprint camera logic re-supply values downstream of constructors. Patch the per-frame view copy instead.
 7. **UE4SS Lua per-tick camera overrides**: a polling loop toggling `bConstrainAspectRatio`/axis constraint on components visibly fights the game's Blueprint camera system (flicker, lag, delayed aspect transitions). Runtime property wrestling is a dead end in this game; if a runtime component is ever reintroduced, it must be event-scoped (see 5.3).
 8. **Class-identity gates for the loading view** (cine-only unconstrain, exact-16/9 float matching in either direction): field A/B testing proved the loading view shares camera identity and aspect constants with cutscene/menu cameras in every combination tried - see section 5 for why no such gate can work.
-9. **SUWSF in-memory patching for this fix**: SUWSF cannot express patch-time-computed code caves and rel32 displacements; its float-value patches also can't implement conditional logic. (Historical note: SUWSF's `Value="auto"` doesn't parse for floats; `Value="aspectratio"` works for plain constants.)
+9. **Patching `FMinimalViewInfo::BlendViewInfo`'s flag merge** (`0x4408E19`): the function does lerp `AspectRatio` and merge `bConstrainAspectRatio` with `|=`, so a view-target blend really is constrained from weight 0 while the aspect is still 16:9. Rewriting the merge to `AND` was correct in itself and had **zero observable effect** - the constraint is re-asserted per frame from the component, so the blended value never survives. A good reminder that a real mechanism is not automatically the active one.
+10. **Chasing the dialogue-exit zoom statically** (three iterations - intrinsic Hor+/Vert- framing difference, the blend flag merge above, then the patched `0x23E665C` constant as the ramp target). All three were wrong; see section 10d. The system is *animated*, and no amount of disassembly showed that. One runtime capture did.
+11. **SUWSF in-memory patching for this fix**: SUWSF cannot express patch-time-computed code caves and rel32 displacements; its float-value patches also can't implement conditional logic. (Historical note: SUWSF's `Value="auto"` doesn't parse for floats; `Value="aspectratio"` works for plain constants.)
 
 ---
 
@@ -231,8 +247,10 @@ During loading transitions, narrow strips of the still-streaming world can appea
 
 ## 8. Tools in This Package
 
-1. **`patcher.py`** - cross-platform Python 3.6+ patcher, zero dependencies. Modes: `cine` (recommended), `horplus`, `hybrid`, `clean`, `full` (see `--help`), `stock` (restore). Signature-scan fallback for game updates; always patches from the pristine `.original` backup so modes never stack.
-2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`): auto-detects the game executable and monitor resolution, applies the recommended mode, 1-click restore.
+1. **`patcher.py`** - the installer and the single source of truth for everything this fix writes. Four independent parts, all on by default: the executable camera patch, the full-width UI container patch (delegated to `tools/assetdump/`), and two `Engine.ini` tweaks (chromatic aberration off, anti-blur TSR settings) written as one removable managed block. `--restore` undoes all of it byte-for-byte. Carries PEP 723 inline metadata, so `uv run patcher.py` needs no virtualenv and fetches `blake3` itself. Signature-scan fallback for game updates; always patches from the pristine `.original` backup, so re-runs never stack.
+   Advanced: `--mode` patches only the executable, in one of `cine` (shipped behaviour), `horplus`, `hybrid`, `clean`, `full`, `stock`.
+2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`). A **thin front-end only**: it detects the game and display, shows the four options as checkboxes, and shells out to `patcher.py` (preferring `uv run`, then `py`, then `python`), streaming its output. It contains no patch logic. An earlier version reimplemented the byte patches in C# and silently drifted out of sync - keeping one implementation is deliberate.
+3. **`tools/assetdump/`** - the IoStore/Zen container reader and the UI layout patcher (section 9).
 
 ---
 
@@ -402,3 +420,63 @@ The main-menu and title screens are full-bleed compositions with no 3840 box to 
 ### 9d. Binary Reference - UI Classes
 
 Native window classes recovered from the exe's UTF-16 string table: `UUIWindow`, `UOverlayUIWindow`, `UModalUIWindow`, `UUIObjectWindow`, `UUIWindowLogic`, `UIWindowProps`, `UD9UIWindowManager`, `UChronosUIWindowManager`, `UChronosUISceneTextureSubsystem`, plus one `UChronos*Window` / `U*Window` pair per screen (`UChronosLoadingWindow`, `UChronosNotificationWindow`, `UChronosMainMenuWindow`, `UChronosPauseWindow`, ...). `UScaleBox`, `USafeZone` and their slots are linked in but unused by the windows inspected so far.
+
+## 10. Runtime Camera Measurement - The Letterbox Ramp
+
+Sections 2-9 were derived statically. The dialogue-exit zoom resisted that approach through three wrong hypotheses, so it was settled by measurement instead: a read-only UE4SS Lua mod sampling `APlayerCameraManager` every frame and logging `ViewTarget.Target`, `ViewTarget.POV.{FOV, AspectRatio, bConstrainAspectRatio, Location}` and `CameraCachePrivate.POV` (the finished, post-blend view that reaches the renderer). It hooked nothing and wrote nothing back. **Debug only - it is not part of the shipped fix.**
+
+`FMinimalViewInfo` and `FTViewTarget` are fully reflected, so all of the above is readable from Lua. (`FGeometry`, used for the UI work in section 9, is not - hence that being done from static asset reads.)
+
+### 10a. What a dialogue exit actually does
+
+Compressed capture of one hand-off, with the vertical FOV derived as `2*atan(tan(FOV/2)/aspect)`:
+
+```
+rows      view target               aspect     con     FOV h            vFOV
+348-352   BP_ChronosCameraPawn_C    1.77778    false   35.39 -> 65.08   20.35 -> 39.49
+353-411   BP_ChronosCameraPawn_C    1.778 .. 2.370  false   65.09 -> 72.31   39.43 -> 34.27
+412-481   BP_ChronosCameraPawn_C    2.37037    true    72.39 -> 75.00   34.32 -> 35.88
+482-507   BP_Max_Coat01A_C          1.77778    false   75.00            46.69   <-- +10.8 deg snap
+```
+
+Three facts fall out of this and none of them were guessable:
+
+1. **The camera's `AspectRatio` member is animated**, over roughly a second, from the authored 16:9 up to the **viewport** aspect. It is not a blend between two static cameras and it is not read from any constant we patch - the capture above was taken with both aspect constants at their stock 16:9 values and the ramp still ended at `2.37037` on a 5120x2160 display.
+2. **The horizontal FOV is identical at both ends of the hand-off** (75.00 on the camera pawn, 75.00 on the gameplay camera). The entire visible artifact was the aspect.
+3. **Free-roam exploration runs at `1.77778` unconstrained** - it was already rendering Hor+ through cave A, and had been since cave A was introduced. The documentation claiming "exploration constrained at monitor aspect" was wrong.
+
+### 10b. Why it looked like two different bugs
+
+The ramp is the game's **letterbox-open animation**: it widens the cinematic frame out to the screen when returning control. On a 16:9 display it is a no-op, because the authored aspect already equals the viewport aspect. In stock UE on an ultrawide display it is still harmless - a constrained camera takes the `MaintainXFOV` path, where `AspectRatio` only sizes the view *rect*.
+
+Under the forced `MaintainYFOV` branch (2b), `AspectRatio` becomes the FOV **divisor**. The same animation then produced two symptoms that looked unrelated:
+
+- while the ramp was inside cave A's old `(1.75, 1.8)` window the camera was unconstrained, and the climbing divisor narrowed the vertical FOV - **a zoom-in**;
+- the moment the ramp crossed `1.8` the camera fell *out* of the window, the constraint came back at an aspect well below the viewport, and the view **pillarboxed**, the bars then shrinking to nothing as the ramp reached the viewport aspect;
+- and when the gameplay camera finally took over at 16:9, the framing **snapped** by +10.8 degrees.
+
+### 10c. The fix
+
+Cave A now does two things for every camera it unconstrains: clears `bConstrainAspectRatio` as before, **and pins the view's `AspectRatio` to the authored `1.7777778`**, writing it into `[rdi+0x48]`. That is safe because `GetCameraView` copies the component's aspect into the output view immediately *before* the patched site:
+
+```
+0x441A143  mov eax, [rbx+0x2B0]     ; component AspectRatio (the animated value)
+0x441A149  mov [rdi+0x48], eax      ; view.AspectRatio = it
+0x441A14C  call caveA               ; rdi still points at the view
+```
+
+The gate's upper bound also moves from a fixed `1.8` to `display aspect * 1.002`, so the whole ramp - endpoint included - stays inside the window instead of falling out of it mid-animation.
+
+This restores the rule already stated in 2a: **the divisor must be the aspect the FOV was authored for.** The letterbox animation moves `AspectRatio` away from that authored value; pinning puts it back. Cameras below the gate (square capture cameras, ~1.0) are untouched, which is why the photo pipeline is unaffected.
+
+### 10d. Hypotheses this replaced
+
+Recorded because each looked convincing and each was wrong - the sequence is a fair warning about static-only reasoning on an animated system.
+
+1. *"It is the intrinsic Hor+ / Vert- framing difference between cinematic and exploration cameras."* Wrong: exploration was never Vert-.
+2. *"`FMinimalViewInfo::BlendViewInfo` merges `bConstrainAspectRatio` with `|=`, so a blend is constrained at weight 0 while the aspect is still 16:9."* The mechanism is real - the OR is at `0x4408E19`, and `AspectRatio` genuinely is lerped there - but changing it to `AND` had **no observable effect**, because the constraint is re-asserted per frame from the component rather than surviving in the blended view. Not the cause.
+3. *"The ramp converges on the constant we patched at `0x23E665C`."* Wrong: reverting both constants to stock left the ramp ending at the same `2.37037`. The target is the viewport aspect.
+
+Only the fourth attempt - measuring instead of inferring - produced the answer, and it took a single capture to do it.
+
+---

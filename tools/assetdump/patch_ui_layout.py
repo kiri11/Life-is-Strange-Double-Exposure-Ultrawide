@@ -28,8 +28,21 @@ from slots import decode_slot
 
 DESIGN_W, DESIGN_H = 3840.0, 2160.0
 UI = 'Chronos/Content/UI/'
-DEFAULT_PAKS = (r'D:\SteamLibrary\steamapps\common\LifeIsStrangeDoubleExposure'
-                r'\Chronos\Content\Paks')
+def _default_paks():
+    """Walk up from this script looking for the game's Content/Paks."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        cand = os.path.join(here, 'Chronos', 'Content', 'Paks')
+        if os.path.isdir(cand):
+            return cand
+        parent = os.path.dirname(here)
+        if parent == here:
+            break
+        here = parent
+    return os.getcwd()
+
+
+DEFAULT_PAKS = _default_paks()
 
 L, T, R, B = 0, 1, 2, 3
 

@@ -1,132 +1,133 @@
 # Life is Strange: Double Exposure - Ultrawide & Cutscene Fix
 
-A lightweight, native ultrawide fix for **Life is Strange: Double Exposure** supporting 21:9, 32:9, 32:10, and custom resolutions.
+A lightweight, native ultrawide fix for **Life is Strange: Double Exposure** supporting 21:9, 32:9, 32:10, 16:10 and custom resolutions.
 
 ---
 
 ## What This Fix Does
 
-- **True Hor+ Ultrawide Cutscenes & Dialogues:** Cinematics render full-width with **0% vertical crop**. The full 16:9 vertical framing (faces, headroom, director composition) is preserved and the horizontal field of view is *expanded* to fill your monitor. No black bars, no cut chins or foreheads.
-- **Ultrawide Free-Roam Exploration:** Full-width rendering during gameplay.
-- **Correct Photo Mechanics:** Max's Polaroid photographs and in-game camera captures retain proper 1:1 proportions without stretching or skewing. The camera UI works unchanged.
-- **No Zoom Bug After Cutscenes:** The engine-level cause of the camera zoom when a cutscene hands control back to the player (Unreal's sequencer can leave the aspect-axis constraint on `MaintainXFOV`) is neutralized at the projection branch.
-- **Fully Static:** A handful of patched bytes in the executable. No runtime hooks, no DLL injection, no Lua mods, no background processes, no performance impact. Behavior-neutral on a 16:9 display.
-- **Full-Width UI (optional second patch):** the loading overlay covers the whole screen instead of leaving the still-streaming world visible at the sides, and HUD elements such as phone notifications sit on the physical screen edge instead of an invisible 16:9 boundary. See "Ultrawide UI Layout" below.
+- **True Hor+ ultrawide everywhere.** Cutscenes, dialogues and free-roam exploration all render with **0% vertical crop**: the complete 16:9 vertical framing (faces, headroom, director composition) is preserved and the horizontal field of view is *expanded* to fill your monitor. No black bars, no cut chins or foreheads.
+- **No camera zoom or snap when a dialogue or cutscene ends.** Both the sequencer's leaked aspect-axis constraint and the game's own letterbox-open animation are handled, so control returns to the player without a framing jump.
+- **Correct photo mechanics.** Max's Polaroids and the in-game camera keep proper proportions without stretching or skewing, and the photo pipeline is left bit-identical to vanilla.
+- **Full-width UI (optional).** Loading screens cover the whole screen instead of leaving the still-streaming world visible at the sides, and HUD elements such as phone notifications sit on the physical screen edge rather than an invisible 16:9 boundary.
+- **Display tweaks (optional).** Disable chromatic aberration, and apply recommended anti-blur TSR settings for your resolution.
+- **Fully static.** A handful of patched bytes in the executable plus an in-place edit of the game's data. No runtime hooks, no DLL injection, no Lua mods, no background processes, no performance impact. Behaviour-neutral on a 16:9 display.
 
-**Known limitation:** returning from a *dialogue* to exploration still shows a brief camera zoom. The equivalent bug after cutscenes is fixed; the dialogue path is not yet covered - see "Possible Improvements".
+Everything is reversible with a single **Restore** action.
 
 ## How It Works (Short Version)
 
-UE5 already contains perfect Hor+ math: in the `MaintainYFOV` projection path it derives the vertical FOV from the aspect ratio the camera was *authored* for (`vFOV = 2*atan(tan(hFOV/2) / authoredAspect)`) and then expands horizontally to the real viewport. The fix:
+UE5 already contains perfect Hor+ math: in the `MaintainYFOV` projection path it derives the vertical FOV from the aspect ratio the camera was *authored* for (`vFOV = 2*atan(tan(hFOV/2) / authoredAspect)`) and then expands horizontally to the real viewport. The fix is three code changes and no aspect-ratio constants at all:
 
-1. Forces that Hor+ projection branch for every unconstrained camera (2 bytes).
-2. Adds a small code cave in `UCameraComponent::GetCameraView` that lifts the 16:9 pillarbox constraint from cameras authored ~16:9 - the cutscene and dialogue cameras - while cameras carrying other aspect ratios (exploration at the patched monitor ratio, square photo-capture cameras) keep their classic behavior.
-3. Adds a second cave on the unique `UCineCameraComponent` super-call that keeps the game's cine-class views (loading/transition holds) constrained.
-4. Patches the classic player-camera and photo-table aspect constants to your monitor's ratio.
+1. **Force that Hor+ projection branch** for every perspective camera (2 bytes). This also neutralises the sequencer bug that leaks `MaintainXFOV` after a cutscene.
+2. **Cave A** in `UCameraComponent::GetCameraView`: unconstrain every camera authored *narrower* than your display, and **pin the FOV divisor to the authored 16:9**. The pin matters because the game *animates* a camera's `AspectRatio` up to the viewport aspect when it hands control back from a dialogue - its letterbox-open animation. Without the pin, the forced Hor+ branch reads that animation as a vertical-FOV change, which is exactly the zoom-and-snap this fix removes.
+3. **Cave B** on the unique `UCineCameraComponent` super-call, keeping the game's cine-class views (loading and transition holds) constrained.
 
-See [RESEARCH.md](RESEARCH.md) for the complete technical breakdown.
+See [RESEARCH.md](RESEARCH.md) for the complete technical breakdown, including the runtime measurements that identified the letterbox ramp.
 
 ---
 
 ## Supported Resolutions
 
-Any resolution is supported; presets:
+Any resolution is supported; the installer detects yours automatically. Presets:
 
-| Resolution | Aspect Ratio | Hex Replacement Value |
-| :--- | :--- | :--- |
-| **5120x2160** (WUHD 4K) | 21.33:9 (`2.3703703`) | `26 B4 17 40` |
-| **3440x1440** (UWQHD) | 21.5:9 (`2.3888889`) | `39 8E 18 40` |
-| **2560x1080** (UWD) | 21.33:9 (`2.3703703`) | `26 B4 17 40` |
-| **3840x1600** (UW) | 24:10 (`2.4000000`) | `9A 99 19 40` |
-| **5120x1440** (Super Ultrawide) | 32:9 (`3.5555556`) | `39 8E 63 40` |
-| **3840x1080** (Super Ultrawide) | 32:9 (`3.5555556`) | `39 8E 63 40` |
-| **7680x2160** (Super Ultrawide) | 32:9 (`3.5555556`) | `39 8E 63 40` |
-| **3840x1200** / **4320x1350** | 32:10 (`3.2000000`) | `CD CC 4C 40` |
-| **2560x1600** / **1920x1200** | 16:10 (`1.6000000`) | `CD CC CC 3F` |
-| **Custom** | *Any Width x Height* | *Auto-calculated* |
+| Resolution | Aspect Ratio |
+| :--- | :--- |
+| **5120x2160** (WUHD 4K) | 21.33:9 |
+| **3440x1440** (UWQHD) | 21.5:9 |
+| **2560x1080** (UWD) | 21.33:9 |
+| **3840x1600** (UW) | 24:10 |
+| **5120x1440** / **3840x1080** / **7680x2160** | 32:9 |
+| **3840x1200** (32:10) | 32:10 |
+| **2560x1600** (16:10) | 16:10 |
+| **Custom** | *Any width x height* |
 
 ---
 
 ## Installation
 
-Choose either method. Both create an automatic `.original` backup before patching and can restore it at any time.
+Both methods run the same code - the GUI is a thin front-end over `patcher.py`, so there is only one implementation to keep correct.
 
-### Method 1: Windows GUI Patcher
-1. Run **`LiSUltrawidePatcher.exe`**.
-2. The tool auto-detects your game executable and display resolution.
-3. Keep the recommended mode selected and click **Patch Game Executable**.
-4. Launch the game through Steam.
+### Method 1: Windows GUI
 
-### Method 2: Python Script (Steam Deck / Linux / Proton / macOS / Windows)
+1. Run **`LiSUltrawidePatcher.exe`** (keep it next to `patcher.py`).
+2. It detects your game and display automatically.
+3. Leave all four options ticked and click **Install**.
+
+### Method 2: Command line (Windows / Steam Deck / Linux / Proton / macOS)
+
 ```bash
-python patcher.py --mode cine --width 5120 --height 2160
-```
-Or run `python patcher.py` without arguments for interactive prompts. Restore with:
-```bash
-python patcher.py --mode stock
+uv run patcher.py
 ```
 
-**Requirements:** Python 3.6+, standard library only.
+`uv` ([astral.sh/uv](https://astral.sh/uv)) is the easiest option: no virtualenv, and it fetches the one optional dependency automatically. Plain Python works too:
 
-Manual hex editing is not practical for this fix: besides four static byte edits, it writes two code caves into `int3` padding whose relative addresses are computed at patch time. In-memory patchers (SUWSF and similar) cannot express the caves either - use the bundled patchers.
+```bash
+python patcher.py
+```
+
+Run with no arguments for an interactive install, or drive it directly:
+
+```bash
+python patcher.py --yes
+python patcher.py --width 5120 --height 2160 --yes
+python patcher.py --restore
+```
+
+**Requirements:** Python 3.6+ (3.8+ under `uv`). The full-width UI step additionally needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor DLL, which cannot be redistributed - see [tools/assetdump/README.md](tools/assetdump/README.md). If either is missing, that one step is skipped and reported; everything else still installs.
+
+### What each option does
+
+| Option | Effect | Touches |
+| :--- | :--- | :--- |
+| **Ultrawide camera** | Hor+ cutscenes, dialogue and exploration; no bars, no zoom on hand-off | `Chronos-Win64-Shipping.exe` |
+| **Full-width UI** | Loading screens cover the screen; HUD on the real edge | `pakchunk0-Windows.utoc` / `.ucas` |
+| **Disable chromatic aberration** | Removes colour fringing, most visible at the widened edges | `Engine.ini` |
+| **Reduce blurriness** | Recommended TSR settings for your resolution | `Engine.ini` |
+
+All four are enabled by default and each can be turned off (`--no-exe`, `--no-game-files`, `--no-chromatic-fix`, `--no-sharpen`).
+
+Every part creates a backup before writing: `.exe.original`, `.utoc.original`, and a clearly marked, individually removable block in `Engine.ini`. Re-running never stacks changes - each run starts from the pristine state.
+
+> Do not run Steam's **Verify Integrity of Game Files** while the full-width UI patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update also overwrites it; just re-run the installer afterwards.
 
 ---
 
-## Optional Engine.ini Tweaks
+## Display Tweaks in Detail
 
-Not required, but recommended at ultrawide resolutions. Add to `%localappdata%\Chronos\Saved\Config\Windows\Engine.ini`:
+The last two options write one managed block into `%localappdata%\Chronos\Saved\Config\Windows\Engine.ini`. Your existing settings are left untouched, and `--restore` removes the block byte-for-byte.
+
+TSR - UE5's temporal upscaler - is what makes this game look soft. The two settings that matter most are rendering at 100% of the output resolution instead of upscaling from a lower one, and giving TSR a history buffer above output resolution to resolve detail from. The history multiplier is the expensive one, so it is scaled back at very high pixel counts (200 below ~8 MP, 150 above). These are a sane starting point rather than gospel - every line is an ordinary UE console variable, commented in the file, and safe to edit afterwards.
+
+Optional extra, not written by the installer - faster streaming reduces texture pop-in at the screen sides during loading transitions:
 
 ```ini
 [SystemSettings]
-; Reduce strong chromatic aberration at the expanded screen edges
-r.SceneColorFringeQuality=0
-; Optional: faster texture/level streaming reduces visible pop-in at the
-; screen sides during loading transitions
 r.Streaming.PoolSize=4096
 r.Streaming.FramesForFullUpdate=1
 ```
 
 ---
 
-## Ultrawide UI Layout (Optional Second Patch)
-
-The executable patch fixes the *camera*. The game's UI is a separate problem with a separate cause: `BP_UIWindowManager`'s `WindowParent` - the panel every game window is reparented into - is a fixed **3840x2160 box centred in the viewport**. On a 5120x2160 display that leaves 640 px of dead space on each side, which is why the loading overlay did not cover the screen and why notifications stopped short of the edge. Full analysis in [RESEARCH.md](RESEARCH.md) section 9.
-
-This cannot be an executable byte patch - the value lives in cooked asset data - so it is applied to the IoStore container instead:
-
-```bash
-python tools/assetdump/patch_ui_layout.py --width 5120 --height 2160
-python tools/assetdump/patch_ui_layout.py --restore
-```
-
-**Requirements:** Python 3.6+, `pip install blake3`, and an Oodle decompressor DLL (see [tools/assetdump/README.md](tools/assetdump/README.md)).
-
-The patch rewrites 15 existing floats across 10 widget packages: one widens `WindowParent` to the real UMG design space (`viewport / DPIScale`, where the DPI scale is UE's `ScaleToFit` rule `min(W/3840, H/2160)`), and the rest re-inset the handful of elements an automated audit found positioned by absolute coordinates on the 3840 canvas - the pause title, several fixed-width backgrounds, and the main-menu/title-screen compositions, which are deliberately kept in their authored 16:9 framing rather than dragged to the physical screen edges.
-
-It is **append-only**: modified package chunks are written as new uncompressed blocks at the end of the `.ucas`, the TOC block entries are repointed, and each chunk's BLAKE3 meta hash is recomputed. Existing bytes are never overwritten and `.utoc` is backed up, so `--restore` is exact.
-
-> Do not run Steam's **Verify Integrity of Game Files** while this patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update will also overwrite it; re-run the patcher afterwards.
-
----
-
 ## Possible Improvements
 
-- **Dialogue-exit camera zoom:** returning from a dialogue to exploration briefly zooms in. The cutscene equivalent is fixed at the projection branch (see "How It Works"), but the dialogue path is not. Leading hypothesis is the view *blend* rather than a leaked axis constraint: `FMinimalViewInfo::BlendViewInfo` propagates `bConstrainAspectRatio` with `|=`, so a blend out of an unconstrained ~1.778 dialogue camera toward the constrained monitor-ratio exploration camera runs the Hor+ path with a mid-blend aspect, and `vFOV = atan(tan(hFOV/2)/aspect)` narrows as that aspect climbs. Unverified - it needs a per-frame recording of `(AspectRatio, bConstrainAspectRatio)` across a dialogue exit.
-- **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside the (1.75, 1.8) gate window; the gate can be extended per report.
+- **Player-menu tabs:** three full-stretch tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are not repositioned by the UI patch. Giving them the centred box their three siblings already have needs a *structural* package edit (adding serialized properties changes the package size), which the in-place float patcher deliberately does not support.
+- **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside cave A's gate window; the gate can be extended per report.
 
 ---
 
 ## Troubleshooting
 
 - **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
-- **Everything looks wrong after a game update:** the patchers locate all code sites by unique byte signatures and will report if the game version is unsupported; re-run the patcher after updates.
-- **Restore stock:** GUI "Restore Original Stock" button, or `python patcher.py --mode stock`.
+- **The full-width UI step was skipped:** it needs `blake3` and an Oodle DLL (see Installation). Use `uv run patcher.py` to get `blake3` automatically.
+- **Everything looks wrong after a game update:** all code sites are located by unique byte signatures and the patcher reports cleanly if the game version is unsupported. Re-run the installer after updates.
+- **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
 
 ---
 
 ## Technical Documentation & Research
 
-For the reverse-engineering breakdown, Unreal Engine 5 projection matrix analysis, disassembly of the patched sites, the loading-transition analysis, and dead ends explored, see **[RESEARCH.md](RESEARCH.md)**. Historical iterations of this fix are preserved in git history.
+For the reverse-engineering breakdown, Unreal Engine 5 projection-matrix analysis, disassembly of the patched sites, the asset-container tooling, the runtime camera measurements, and the dead ends explored, see **[RESEARCH.md](RESEARCH.md)**. Historical iterations of this fix are preserved in git history.
 
 ---
 
