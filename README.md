@@ -82,7 +82,19 @@ python patcher.py --width 5120 --height 2160 --yes
 python patcher.py --restore
 ```
 
-**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step additionally needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor DLL, which cannot be redistributed - see [tools/assetdump/README.md](tools/assetdump/README.md). If either is missing, that one step is skipped and reported; everything else still installs.
+**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step also needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor, which the installer obtains for you - see below. If either is unavailable, that one step is skipped and reported; everything else still installs.
+
+### About the Oodle decompressor
+
+The game's data files are 97% Oodle-compressed, and Oodle ships *statically linked* inside the game executable, so reading a package needs a standalone decompressor. It cannot be bundled here - it is proprietary, and redistributing it is governed by the Unreal Engine EULA.
+
+The installer resolves this itself, in order:
+
+1. a copy already in `tools/assetdump/`;
+2. one shipped by **another Unreal Engine game on your PC** - most UE titles carry `oo2core_*_win64.dll`, which exports the same entry point, so nothing is downloaded;
+3. otherwise Epic's Oodle-for-UE build (~7 MB), downloaded on request from [WorkingRobot/OodleUE](https://github.com/WorkingRobot/OodleUE).
+
+Only step 3 touches the network, and only after you agree - the GUI asks, and the command line asks unless you pass `--fetch-oodle` (or `--yes`, which declines rather than downloading silently). Decline and just that one step is skipped.
 
 ### What each option does
 

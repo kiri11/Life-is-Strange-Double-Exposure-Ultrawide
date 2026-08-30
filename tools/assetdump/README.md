@@ -9,10 +9,15 @@ null `EncryptionKeyGuid`, plaintext directory index). Oodle is the only real gat
 ## Setup
 
 Oodle ships statically linked inside `Chronos-Win64-Shipping.exe`, so a standalone
-decompressor is needed. Grab one from Epic's Oodle-for-UE source build:
+decompressor is needed. **`patcher.py` handles this automatically** - it reuses one
+shipped by another Unreal Engine game if you have one, and otherwise offers to
+download Epic's Oodle-for-UE build. To do it by hand instead:
 
     curl -sL -o oodle.zip https://github.com/WorkingRobot/OodleUE/releases/latest/download/msvc-x64-release.zip
     # extract bin/oodle-data-shared.dll next to oodle.py
+
+`oodle.py` loads, in order: `$LISDE_OODLE_DLL` (set by `patcher.py` when it locates
+one elsewhere), then `oodle-data-shared.dll` / `oo2core_*_win64.dll` in this folder.
 
 ## Files
 

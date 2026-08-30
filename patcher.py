@@ -640,6 +640,131 @@ def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
 
 
 # ---------------------------------------------------------------------------
+# Oodle decompressor acquisition
+# ---------------------------------------------------------------------------
+# The game's containers are 97% Oodle-compressed and Oodle ships *statically
+# linked* inside the game executable, so reading a package needs a standalone
+# decompressor. It cannot be bundled here (proprietary, and redistributing it
+# is governed by the Unreal Engine EULA), so it is located or fetched instead:
+#
+#   1. one already sitting in tools/assetdump/ or next to this script;
+#   2. one shipped by another Unreal Engine game on this machine - most UE
+#      titles carry oo2core_*_win64.dll, and it exports the same entry point;
+#   3. failing that, Epic's Oodle-for-UE source build, downloaded on request.
+#
+# Only step 3 touches the network, and only after asking.
+
+OODLE_ZIP_URL = ("https://github.com/WorkingRobot/OodleUE/releases/latest/"
+                 "download/msvc-x64-release.zip")
+
+OODLE_NAMES = ("oodle-data-shared.dll", "oo2core_9_win64.dll",
+               "oo2core_8_win64.dll", "liboodle-data-shared.so")
+
+
+def oodle_dir():
+    """Where a downloaded DLL is placed - beside the code that loads it."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "tools", "assetdump")
+
+
+def find_oodle(exe_path=None):
+    """-> path to a usable Oodle DLL, or None. Never touches the network."""
+    import glob
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in (oodle_dir(), here):
+        for n in OODLE_NAMES:
+            p = os.path.join(d, n)
+            if os.path.isfile(p):
+                return p
+    if not exe_path:
+        return None
+    # <library>/<game>/Chronos/Binaries/Win64/x.exe -> <library>
+    library = os.path.abspath(exe_path)
+    for _ in range(5):
+        library = os.path.dirname(library)
+    patterns = [
+        os.path.join(library, "*", "Engine", "Binaries", "ThirdParty",
+                     "Oodle", "*", "*", "*.dll"),
+        os.path.join(library, "*", "Engine", "Binaries", "ThirdParty",
+                     "Oodle", "*", "*.dll"),
+        os.path.join(library, "*", "*", "Binaries", "Win64", "oo2core*.dll"),
+    ]
+    for pattern in patterns:
+        for hit in sorted(glob.glob(pattern)):
+            base = os.path.basename(hit).lower()
+            if base.startswith("oo2core") or "oodle" in base:
+                return hit
+    return None
+
+
+def fetch_oodle():
+    """Download Epic's Oodle-for-UE build and keep the decompressor. -> path/None."""
+    import zipfile
+    try:
+        from urllib.request import urlopen, Request
+    except ImportError:                                   # Python 2 safety net
+        from urllib2 import urlopen, Request
+
+    dest_dir = oodle_dir()
+    zip_path = os.path.join(dest_dir, "_oodle_download.zip")
+    try:
+        if not os.path.isdir(dest_dir):
+            os.makedirs(dest_dir)
+        print("  downloading {} ...".format(OODLE_ZIP_URL))
+        req = Request(OODLE_ZIP_URL, headers={"User-Agent": "LiSUltrawideFix"})
+        data = urlopen(req).read()
+        with open(zip_path, "wb") as f:
+            f.write(data)
+        print("  {:.1f} MB downloaded, extracting...".format(len(data) / 1e6))
+
+        with zipfile.ZipFile(zip_path) as z:
+            wanted = None
+            for name in z.namelist():
+                base = name.rsplit("/", 1)[-1].lower()
+                if base == "oodle-data-shared.dll":
+                    wanted = name
+                    break
+                if wanted is None and (base.startswith("oo2core")
+                                       and base.endswith(".dll")):
+                    wanted = name
+            if wanted is None:
+                print("  !! the archive contained no Oodle DLL")
+                return None
+            out = os.path.join(dest_dir, "oodle-data-shared.dll")
+            with z.open(wanted) as src:
+                with open(out, "wb") as dst:
+                    dst.write(src.read())
+        print("  Oodle ready: {}".format(out))
+        return out
+    except Exception as ex:
+        print("  !! download failed: {}".format(ex))
+        print("     Fetch it manually - see tools/assetdump/README.md")
+        return None
+    finally:
+        try:
+            if os.path.isfile(zip_path):
+                os.remove(zip_path)
+        except Exception:
+            pass
+
+
+def ensure_oodle(exe_path, allow_fetch, interactive):
+    """Locate Oodle, optionally downloading it. -> path or None."""
+    found = find_oodle(exe_path)
+    if found:
+        return found
+    if not allow_fetch:
+        if not interactive:
+            return None
+        print("\n  The full-width UI step needs an Oodle decompressor, which cannot")
+        print("  be bundled with this fix (it is proprietary). It can be downloaded")
+        print("  from Epic's Oodle-for-UE build:")
+        print("      " + OODLE_ZIP_URL)
+        if not ask_yes("  Download it now?", True):
+            return None
+    return fetch_oodle()
+
+# ---------------------------------------------------------------------------
 # Game-file (UI layout) patch - delegates to tools/assetdump/patch_ui_layout.py
 # ---------------------------------------------------------------------------
 
@@ -650,15 +775,8 @@ def paks_dir_for(exe_path):
     return os.path.join(chronos, "Content", "Paks")
 
 
-def oodle_present():
-    here = os.path.dirname(os.path.abspath(__file__))
-    names = ("oodle-data-shared.dll", "oo2core_9_win64.dll", "liboodle-data-shared.so")
-    return any(os.path.isfile(os.path.join(here, "tools", "assetdump", n))
-               or os.path.isfile(os.path.join(here, n)) for n in names)
-
-
 def game_files_requirements():
-    """-> (ok, [missing]) for the UI-layout patch's extra dependencies."""
+    """-> (ok, [missing]) for dependencies this installer cannot resolve itself."""
     missing = []
     try:
         import blake3  # noqa: F401
@@ -666,13 +784,10 @@ def game_files_requirements():
         missing.append("the 'blake3' module - run this installer with "
                        "'uv run patcher.py' and it is fetched automatically, "
                        "or 'pip install blake3'")
-    if not oodle_present():
-        missing.append("an Oodle decompressor DLL in tools/assetdump/ "
-                       "(see tools/assetdump/README.md - it cannot be redistributed)")
     return (not missing), missing
 
 
-def apply_game_files(exe_path, width, height, restore=False):
+def apply_game_files(exe_path, width, height, restore=False, oodle_dll=None):
     import subprocess
     here = os.path.dirname(os.path.abspath(__file__))
     script = os.path.join(here, "tools", "assetdump", "patch_ui_layout.py")
@@ -681,8 +796,12 @@ def apply_game_files(exe_path, width, height, restore=False):
         return False
     cmd = [sys.executable, script, "--paks", paks_dir_for(exe_path)]
     cmd += ["--restore"] if restore else ["--width", str(width), "--height", str(height)]
+    env = dict(os.environ)
+    if oodle_dll:
+        env["LISDE_OODLE_DLL"] = oodle_dll
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, env=env)
         out, _ = proc.communicate()
     except Exception as ex:
         print("  !! could not run the UI-layout patcher: {}".format(ex))
@@ -733,11 +852,13 @@ def choose_resolution(detected):
 
 
 def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, restore=False):
+                do_sharpen, restore=False, fetch_oodle_ok=False,
+                interactive=True):
     if restore:
         print("\nRestoring everything to stock...")
         patch_exe(exe_path, 16, 9, "stock")
-        apply_game_files(exe_path, width, height, restore=True)
+        apply_game_files(exe_path, width, height, restore=True,
+                         oodle_dll=find_oodle(exe_path))
         apply_engine_ini(width, height, False, False, remove=True)
         print("\nDone - the game is back to its shipped state.")
         return True
@@ -755,12 +876,16 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
     print("\n[2/3] Full-width UI (game files)")
     if do_files:
         good, missing = game_files_requirements()
-        if good:
-            ok = apply_game_files(exe_path, width, height) and ok
+        oodle = ensure_oodle(exe_path, fetch_oodle_ok, interactive) if good else None
+        if good and oodle:
+            print("  using Oodle: {}".format(oodle))
+            ok = apply_game_files(exe_path, width, height, oodle_dll=oodle) and ok
         else:
             print("  !! skipped - this step also needs:")
             for m in missing:
                 print("       - " + m)
+            if good and not oodle:
+                print("       - an Oodle decompressor (declined or unavailable)")
             print("     Everything else was still applied.")
             ok = False
     else:
@@ -793,6 +918,9 @@ def main():
                         help="skip the ultrawide camera patch (the executable)")
     parser.add_argument("--no-game-files", action="store_true",
                         help="skip the full-width UI patch (the game data files)")
+    parser.add_argument("--fetch-oodle", action="store_true",
+                        help="allow downloading the Oodle decompressor without "
+                             "asking (the full-width UI step needs one)")
     parser.add_argument("--no-chromatic-fix", action="store_true",
                         help="skip disabling chromatic aberration")
     parser.add_argument("--no-sharpen", action="store_true",
@@ -871,7 +999,9 @@ def main():
         print("\nNothing selected - exiting.")
         return
 
-    run_install(exe_path, width, height, do_exe, do_files, do_chromatic, do_sharpen)
+    run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
+                do_sharpen, fetch_oodle_ok=args.fetch_oodle,
+                interactive=not args.yes)
 
 
 if __name__ == "__main__":

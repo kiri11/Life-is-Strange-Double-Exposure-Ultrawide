@@ -276,6 +276,25 @@ namespace LiSUltrawidePatcher
             "-ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"";
 
         private bool uvOffered;
+        private bool oodleOffered;
+        private bool fetchOodle;
+
+        /// <summary>True if an Oodle DLL is already sitting in tools/assetdump.</summary>
+        private static bool OodleAlreadyPresent()
+        {
+            string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                                      Path.Combine("tools", "assetdump"));
+            if (!Directory.Exists(dir)) return false;
+            foreach (string pattern in new[] { "oodle-data-shared.dll", "oo2core_*.dll" })
+            {
+                try
+                {
+                    if (Directory.GetFiles(dir, pattern).Length > 0) return true;
+                }
+                catch { }
+            }
+            return false;
+        }
 
         /// <summary>uv from PATH, or from the locations its installer uses.</summary>
         private static string FindUv()
@@ -541,6 +560,29 @@ namespace LiSUltrawidePatcher
                     + "Without it that single step is skipped - the camera patch and "
                     + "the display tweaks still apply normally.");
             }
+
+            // The full-width UI step also needs an Oodle decompressor, which
+            // cannot be bundled (proprietary). patcher.py can locate one shipped
+            // by another UE game or download Epic's Oodle-for-UE build, but only
+            // with permission - so ask here and pass the flag through.
+            if (chkGameFiles.Checked && !oodleOffered && !OodleAlreadyPresent())
+            {
+                oodleOffered = true;
+                DialogResult d = MessageBox.Show(
+                    "The \"Full-width UI\" option needs an Oodle decompressor to read "
+                    + "the game's data files. It cannot be bundled with this fix "
+                    + "because it is proprietary.\r\n\r\n"
+                    + "Allow the patcher to obtain one? It first looks for a copy "
+                    + "shipped by another Unreal Engine game on this PC, and only "
+                    + "downloads Epic's Oodle-for-UE build (~7 MB) if there is "
+                    + "none.\r\n\r\n"
+                    + "Choosing No just skips that one step - the camera patch and "
+                    + "the display tweaks still apply normally.",
+                    "Get Oodle decompressor?", MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+                if (d == DialogResult.Yes) fetchOodle = true;
+            }
+            if (fetchOodle) argv.Add("--fetch-oodle");
 
             if (!chkExe.Checked) argv.Add("--no-exe");
             if (!chkGameFiles.Checked) argv.Add("--no-game-files");
