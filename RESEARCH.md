@@ -313,6 +313,17 @@ caveA (33B), caveB (18B): written into int3 inter-function padding
 
 Expected result matrix: cutscenes/dialogues Hor+ full-width (v1-equivalent rendering); exploration classic full-width; photos classic; loading pillarboxed both via untouched non-16:9 camera classes and via cave B for cine views; menus and any other 16:9-authored views become Hor+ (harmless). Both cave locations and all displacements are computed at patch time from unique signatures.
 
+### v4 Field Result and the v5 Exact-16/9 Exclusion
+v4 field test (user-confirmed): cutscenes wide with full vertical framing, exploration good, camera UI and photos correct - **best version so far**, committed as the v4 baseline. Remaining issue: loading views were still wide. Since cave B demonstrably constrains all cine views, the wide loading view must be a *non-cine* camera authored ~16:9 that passes cave A's window - plausibly the destination scene's own camera holding while the world streams in.
+
+One static discriminator remains before concluding the problem is temporal: the binary uses **two distinct 16:9 float constants**:
+- `0x3FE38E3B` (1.7777779f) - the camera-component constructor default (`3B 8E E3 3F`, offsets 3/5/6/7/10 style) - cutscene camera classes;
+- `0x3FE38E39` (1.7777778f, the closest float to 16/9) - `ACameraActor`'s constructor (offset 4), the photo table (offset 11), and any ratio *computed* as width/height (e.g. filmback) - system/loading-style cameras.
+
+v5 adds one compare to cave A: views whose `AspectRatio` equals exact-16/9 (`0x3FE38E39`) are kept constrained, while the rest of the (1.75, 1.8) window is unconstrained. Two outcomes:
+- If the loading-hold camera carries the exact-16/9 variant: loading becomes pillarboxed while cutscenes (constructor-default aspect) stay wide - problem solved statically.
+- If loading and cutscenes share the same constant: behavior is identical to v4 (no regression), and the loading issue is confirmed *temporal* (same camera, different moment) - solvable only by time-based masking (post-load grace) or by reducing streaming pop-in (`r.Streaming.*` tweaks in `Engine.ini`).
+
 Result matrix:
 - **Cutscenes/dialogues (cine cameras):** unconstrained -> forced MaintainYFOV branch -> true Hor+ with the authored aspect as divisor. Identical rendering to the user-approved v1 cutscenes.
 - **Exploration:** constrained at the patched monitor aspect - identical to the proven classic 2-offset fix.

@@ -120,9 +120,17 @@ GATE_SITE = {
     "sig": "0F B6 83 B4 02 00 00 33 47 4C 83 E0 01",
     "expected": 0x441A14C,
 }
+# The binary carries two distinct "16:9" float constants: 0x3FE38E3B
+# (1.7777779f, the camera-component constructor default - cutscene cameras)
+# and 0x3FE38E39 (1.7777778f, exact 16/9 - ACameraActor ctor, photo table,
+# computed filmback ratios). Views carrying the exact-16/9 variant are treated
+# as loading/system views and KEPT constrained; everything else inside the
+# (1.75, 1.8) window (the cutscene cameras) is unconstrained for Hor+.
 CAVE_A = bytes.fromhex(
     "0FB683B4020000"    # movzx eax, byte [rbx+0x2B4]
     "8B8BB0020000"      # mov   ecx, [rbx+0x2B0]  (AspectRatio)
+    "81F9398EE33F"      # cmp   ecx, 0x3FE38E39   (exact 16/9 -> stay constrained)
+    "7413"              # je    done
     "81F90000E03F"      # cmp   ecx, 0x3FE00000   (1.75f)
     "760B"              # jbe   done
     "81F96666E63F"      # cmp   ecx, 0x3FE66666   (1.8f)
