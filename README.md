@@ -54,12 +54,12 @@ Choose any of the following installation methods:
 
 ### Method 3: In-Memory Patching via SUWSF (No File Modifications)
 If you prefer not to modify your `.exe` file on disk:
-1. Download [SUWSF](https://github.com/PhantomGamers/SUWSF) and place `SUWSF.asi` and `dxgi.dll` in `Chronos/Binaries/Win64/`.
+1. Download [SUWSF](https://github.com/PhantomGamers/SUWSF/releases) and place `SUWSF.asi` and `dxgi.dll` in `Chronos/Binaries/Win64/`.
 2. Copy the included **`SUWSF.ini`** into `Chronos/Binaries/Win64/`.
 3. Launch the game normally. SUWSF will automatically detect your display resolution and apply the patches in memory at startup.
 
 ### Method 4: Manual Hex Editing (HxD)
-1. Open `Chronos/Binaries/Win64/Chronos-Win64-Shipping.exe` in **HxD**.
+1. Open `Chronos/Binaries/Win64/Chronos-Win64-Shipping.exe` in [HxD](https://mh-nexus.de/en/hxd/) (or any hex editor).
 2. Patch the following 2 offsets with your resolution's hex value:
    - `0x23E665C` (Player Exploration Camera) -> Replace `3B 8E E3 3F` with your resolution hex (e.g. `26 B4 17 40`).
    - `0x69C8A8C` (Photo Projection Table) -> Replace `39 8E E3 3F` with your resolution hex (e.g. `26 B4 17 40`).
