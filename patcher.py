@@ -130,26 +130,67 @@ GATE_SITE = {
 # loading would box cutscenes too. The range gate (rather than an exact
 # float match) is deliberate: it also widens the main menu and any cutscene
 # shots whose 16:9 aspect was serialized with slightly different float bits.
-CAVE_A = bytes.fromhex(
-    "0FB683B4020000"    # movzx eax, byte [rbx+0x2B4]
-    "8B8BB0020000"      # mov   ecx, [rbx+0x2B0]  (AspectRatio)
-    "81F90000E03F"      # cmp   ecx, 0x3FE00000   (1.75f)
-    "760B"              # jbe   done
-    "81F96666E63F"      # cmp   ecx, 0x3FE66666   (1.8f)
-    "7303"              # jae   done
-    "83E0FE"            # and   eax, -2           (clear bConstrainAspectRatio)
-    "C3"                # done: ret
-)
+# The upper bound is a parameter. Two settings are meaningful:
+#
+#   1.8 (default)   - only cameras authored ~16:9 are unconstrained.
+#   monitor aspect  - every camera authored NARROWER than the screen is
+#                     unconstrained ("wide gate", --wide-gate).
+#
+# The wide gate exists because leaving a dialogue does not hand over between two
+# static cameras: Deck Nine drive camera state per frame from data assets, so the
+# live component's AspectRatio member is ANIMATED from 16:9 up to the monitor
+# ratio. With the 1.8 bound the camera falls out of the gate the moment that
+# animation passes 1.8 and is pillarboxed for the rest of the move - bars at full
+# width, then shrinking to nothing as the aspect reaches the monitor ratio. That
+# sweep is the brief zoom seen when a dialogue hands control back. Carrying the
+# bound up to the monitor aspect keeps the camera unconstrained for the whole
+# animation; the exploration camera's final value - exactly the monitor aspect -
+# still lands on `jae` and stays constrained, so nothing else changes.
+GATE_DEFAULT_UPPER = bytes.fromhex("6666E63F")   # 1.8f
 
 
-def apply_aspect_gate_cave(data):
+# AUTHORED_ASPECT is the value pinned into the view for every camera the gate
+# unconstrains. It exists because the game animates a camera's AspectRatio when
+# it hands control back from a dialogue: the member ramps from the authored 16:9
+# up to the VIEWPORT aspect over about a second (measured - see RESEARCH 10).
+# That ramp is the game's letterbox-open animation. In stock UE it is harmless,
+# because a constrained camera takes the MaintainXFOV path where AspectRatio
+# only sizes the view RECT. Under the forced MaintainYFOV branch, AspectRatio
+# becomes the FOV divisor, so the same ramp is re-read as a vertical-FOV change:
+# the view zooms in as the ramp climbs and then snaps back when the gameplay
+# camera (still at 16:9) takes over. Pinning the divisor to the authored aspect
+# restores the rule stated in RESEARCH 2a - the divisor must be the aspect the
+# FOV was AUTHORED for - and makes the whole hand-off framing-neutral.
+AUTHORED_ASPECT = bytes.fromhex("398EE33F")      # 1.7777778f (closest float to 16/9)
+
+
+def build_cave_a(upper_bytes, pin_bytes=AUTHORED_ASPECT):
+    return (bytes.fromhex(
+        "0FB683B4020000"    # movzx eax, byte [rbx+0x2B4]
+        "8B8BB0020000"      # mov   ecx, [rbx+0x2B0]  (component AspectRatio)
+        "81F90000E03F"      # cmp   ecx, 0x3FE00000   (1.75f)
+        "7612"              # jbe   done  (+18)
+        "81F9")             # cmp   ecx, <upper bound>
+        + upper_bytes
+        + bytes.fromhex(
+        "730A"              # jae   done  (+10)
+        "83E0FE"            # and   eax, -2           (clear bConstrainAspectRatio)
+        "C74748")           # mov   dword [rdi+0x48], <authored aspect>
+        + pin_bytes
+        + bytes.fromhex(
+        "C3"))              # done: ret
+
+
+def apply_aspect_gate_cave(data, upper_bytes=GATE_DEFAULT_UPPER):
+    cave_a = build_cave_a(upper_bytes)
     site = locate(data, GATE_SITE)
-    cave = find_code_cave(data, len(CAVE_A) + 8)
-    data[cave:cave + len(CAVE_A)] = CAVE_A
+    cave = find_code_cave(data, len(cave_a) + 8)
+    data[cave:cave + len(cave_a)] = cave_a
     patch = b"\xE8" + struct.pack("<i", cave - (site + 5)) + b"\x66\x90"
     data[site:site + 7] = patch
     print("  patched: aspect-gated unconstrain cave @ {:#x} "
-          "(GetCameraView site {:#x})".format(cave, site))
+          "(GetCameraView site {:#x}, gate upper bound {:.6f})".format(
+              cave, site, struct.unpack("<f", upper_bytes)[0]))
 
 
 def find_text_section(data):
@@ -331,7 +372,7 @@ def patch_photo_table(data, target_bytes):
     print("  patched: {} @ {:#x}".format(PHOTO_TABLE["name"], off))
 
 
-def patch_exe(exe_path, width, height, mode):
+def patch_exe(exe_path, width, height, mode, gate_upper_aspect=None):
     backup_path = exe_path + ".original"
     if not os.path.exists(backup_path):
         shutil.copy2(exe_path, backup_path)
@@ -351,23 +392,27 @@ def patch_exe(exe_path, width, height, mode):
         print("Target Aspect Ratio: {:.6f} (Hex: {})".format(ratio, hex_str))
 
         if mode == "cine":
-            # Recommended: exactly the proven legacy-clean behavior for
-            # exploration, photos and loading (constrained full-width player
-            # camera + matching photo table), plus Hor+ cutscenes:
-            # cinematic CineCameraComponents alone default to unconstrained
-            # (1-byte constructor patch) and the forced MaintainYFOV branch
-            # renders them full-width with the complete 16:9 vertical framing.
-            for off in CLEAN_OFFSETS:
-                data[off:off + 4] = target_bytes
+            # Recommended. Three code changes, no aspect-ratio CONSTANTS at all:
+            #
+            #   1. force the Hor+ MaintainYFOV projection branch;
+            #   2. cave A - unconstrain every camera authored narrower than the
+            #      display, and pin the FOV divisor to the authored 16:9;
+            #   3. cave B - keep the cine (loading/transition) views boxed.
+            #
+            # The aspect constants at 0x23E665C and the photo table are left
+            # STOCK. Runtime measurement (RESEARCH 10) showed they do not govern
+            # the cameras the old comment claimed: free-roam already renders Hor+
+            # through cave A, and the photo pipeline is bit-identical to vanilla
+            # when both constants keep their shipped 16:9 values. Patching them
+            # only desynchronised the dialogue hand-off.
             apply_edits(data, PATCH_AXIS)
-            apply_aspect_gate_cave(data)
+            gate_upper = struct.pack("<f", gate_upper_aspect
+                                     or round(max(ratio, 1.8) * 1.002, 4))
+            apply_aspect_gate_cave(data, gate_upper)
             apply_cine_gcv_cave(data)
-            # note: the UCineCameraComponent ctor default (0x40049FC) stays
-            # STOCK in this mode - cine cameras are the loading views and must
-            # remain constrained (cave B enforces it regardless).
-            print("Applied Cine Hor+ Patch: ultrawide exploration + unskewed "
-                  "photos + pillarboxed loading (as the classic fix) + true "
-                  "Hor+ ultrawide cutscenes and dialogues (0% vertical crop).")
+            print("Applied Cine Hor+ Patch: true Hor+ ultrawide everywhere "
+                  "(0% vertical crop) with unskewed photos and boxed loading "
+                  "views - no zoom or snap when a dialogue hands control back.")
         elif mode == "horplus":
             for spec in HORPLUS_PATCHES:
                 apply_edits(data, spec)
@@ -406,6 +451,7 @@ def patch_exe(exe_path, width, height, mode):
         else:
             raise ValueError("unknown mode: " + mode)
 
+
     tmp_path = exe_path + ".tmp"
     with open(tmp_path, "wb") as f:
         f.write(data)
@@ -433,6 +479,10 @@ def main():
     parser.add_argument("--exe", help="path to Chronos-Win64-Shipping.exe")
     parser.add_argument("--mode", choices=["cine", "horplus", "hybrid", "clean", "full", "stock"],
                         help="patch mode (skips interactive prompts)")
+    parser.add_argument("--gate-upper", type=float, metavar="ASPECT",
+                        help="experimental: explicit cave A upper bound (use your "
+                             "DISPLAY aspect when --width/--height patch a different "
+                             "ratio, e.g. --gate-upper 2.3703704)")
     parser.add_argument("--width", type=int, help="target width, e.g. 5120")
     parser.add_argument("--height", type=int, help="target height, e.g. 2160")
     args = parser.parse_args()
@@ -453,7 +503,8 @@ def main():
         if args.mode not in ("stock", "hybrid") and not (args.width and args.height):
             print("Error: --mode {} requires --width and --height".format(args.mode))
             sys.exit(1)
-        patch_exe(exe_path, args.width or 16, args.height or 9, args.mode)
+        patch_exe(exe_path, args.width or 16, args.height or 9, args.mode,
+                  gate_upper_aspect=args.gate_upper)
         return
 
     print("Select target aspect ratio:")
