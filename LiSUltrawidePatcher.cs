@@ -69,6 +69,195 @@ namespace LiSUltrawidePatcher
             0x23E665C, 0x69C8A8C
         };
 
+        // ------------------------------------------------------------------
+        // True Hor+ mode (see RESEARCH.md "The Hor+ Breakthrough"):
+        // 1) UCameraComponent::GetCameraView: replace the 7-byte
+        //    "movzx eax, byte [rbx+2B4]" with "xor eax,eax + nop5" so the
+        //    bit-merge clears bConstrainAspectRatio for every camera
+        //    (cinematic CineCameras included) -> no pillarbox constraint.
+        // 2) FMinimalViewInfo::CalculateProjectionMatrixGivenViewRectangle:
+        //    rewrite "cmp dl,2" and "cmp dl,1" immediates to 0xFF so every
+        //    perspective camera takes the MaintainYFOV branch, where UE5
+        //    derives vFOV from the AUTHORED aspect ratio -> true Hor+.
+        // The player camera constant 0x23E665C must remain STOCK (1.7777778)
+        // in this mode; only the photo table gets the monitor aspect ratio.
+        // Signatures are unique in the binary and act as a fallback if a game
+        // update shifts the file offsets.
+        // ------------------------------------------------------------------
+
+        private const string SigUnconstrain = "0F B6 83 B4 02 00 00 33 47 4C 83 E0 01";
+        private const int ExpUnconstrain = 0x441A14C;
+        private static readonly byte[] PatchUnconstrain = new byte[] { 0x31, 0xC0, 0x0F, 0x1F, 0x44, 0x00, 0x00 };
+
+        private const string SigAxisBranch = "3B C1 7E 09 80 FA 02 0F 84 ?? ?? ?? ?? 80 FA 01 0F 84 ?? ?? ?? ??";
+        private const int ExpAxisBranch = 0x440ABC0;
+        // relative edits: +6 (cmp dl,2 imm) -> FF, +15 (cmp dl,1 imm) -> FF
+
+        private const string SigPhotoTable = "DF 7C DB 3D 55 55 55 3F 39 8E E3 3F";
+        private const int ExpPhotoTable = 0x69C8A84; // aspect float at +8
+
+        // UCineCameraComponent constructor: "or byte [rdi+2B4], 1" is
+        // bConstrainAspectRatio = true. Rewriting the immediate to 0 makes
+        // cinematic cameras (and only them) default to unconstrained.
+        private const string SigCineCtor = "80 4F 3A 02 33 C0 80 8F 8A 00 00 00 02 80 8F B4 02 00 00 01";
+        private const int ExpCineCtor = 0x40049E9;
+        private const int CineCtorImmOffset = 19;
+
+        // UCineCameraComponent::GetCameraView holds the binary's only direct
+        // call to UCameraComponent::GetCameraView. We reroute it through an
+        // int3-padding code cave that calls the original and then clears
+        // bConstrainAspectRatio (bit 0 of DesiredView+0x4C, held in rdi):
+        //   sub rsp,28 / call Super / add rsp,28 / and byte [rdi+4C],FE / ret
+        private const string SigCineGcvCall = "E8 ?? ?? ?? ?? 4C 8B C7 0F 28 CE 48 8B CB E8";
+        private const int ExpCineGcvCall = 0x4005B78;
+        private const int CineGcvCallAt = 14;
+
+        private int FindCodeCave(byte[] data, int need)
+        {
+            // .text bounds from PE headers
+            int peOff = BitConverter.ToInt32(data, 0x3C);
+            short numSections = BitConverter.ToInt16(data, peOff + 6);
+            short optSize = BitConverter.ToInt16(data, peOff + 20);
+            int secOff = peOff + 24 + optSize;
+            int textLo = -1, textHi = -1;
+            for (int s = 0; s < numSections; s++)
+            {
+                int o = secOff + s * 40;
+                if (data[o] == (byte)'.' && data[o+1] == (byte)'t' && data[o+2] == (byte)'e' && data[o+3] == (byte)'x' && data[o+4] == (byte)'t')
+                {
+                    int rawSize = BitConverter.ToInt32(data, o + 16);
+                    int rawPtr = BitConverter.ToInt32(data, o + 20);
+                    textLo = rawPtr; textHi = rawPtr + rawSize;
+                    break;
+                }
+            }
+            if (textLo < 0) throw new InvalidOperationException(".text section not found.");
+
+            // first int3 run big enough, starting at a run boundary
+            for (int i = textLo + 1; i < textHi - need; i++)
+            {
+                if (data[i] != 0xCC || data[i - 1] == 0xCC) continue;
+                int j = i;
+                while (j < textHi && data[j] == 0xCC) j++;
+                if (j - i >= need) return i;
+                i = j;
+            }
+            throw new InvalidOperationException("No int3 code cave found.");
+        }
+
+        // Cave A: aspect-gated unconstrain in UCameraComponent::GetCameraView.
+        // Replaces the 7-byte movzx flag-copy preamble with "call cave ; nop2".
+        // The cave clears bConstrainAspectRatio (bit 0 of eax) only for cameras
+        // whose authored AspectRatio lies in (1.75, 1.8) - the 16:9 cutscene
+        // cameras. Exploration/photo cameras (patched to the monitor aspect)
+        // and square capture cameras are untouched.
+        private static readonly byte[] CaveAspectGate = new byte[] {
+            0x0F, 0xB6, 0x83, 0xB4, 0x02, 0x00, 0x00,       // movzx eax, byte [rbx+2B4]
+            0x8B, 0x8B, 0xB0, 0x02, 0x00, 0x00,             // mov   ecx, [rbx+2B0]
+            0x81, 0xF9, 0x00, 0x00, 0xE0, 0x3F,             // cmp   ecx, 1.75f
+            0x76, 0x0B,                                     // jbe   done
+            0x81, 0xF9, 0x66, 0x66, 0xE6, 0x3F,             // cmp   ecx, 1.8f
+            0x73, 0x03,                                     // jae   done
+            0x83, 0xE0, 0xFE,                               // and   eax, -2
+            0xC3                                            // done: ret
+        };
+
+        private void ApplyAspectGateCave(byte[] data)
+        {
+            int site = LocateSignature(data, SigUnconstrain, ExpUnconstrain, "GetCameraView gate site");
+            int cave = FindCodeCave(data, CaveAspectGate.Length + 8);
+            CaveAspectGate.CopyTo(data, cave);
+            data[site] = 0xE8;
+            BitConverter.GetBytes(cave - (site + 5)).CopyTo(data, site + 1);
+            data[site + 5] = 0x66; data[site + 6] = 0x90; // 2-byte nop
+            Log(string.Format("Patched: aspect-gated unconstrain cave @ 0x{0:X} (site 0x{1:X})", cave, site));
+        }
+
+        // Cave B: force bConstrainAspectRatio=TRUE on UCineCameraComponent
+        // views (in this game those are the loading/transition cameras, which
+        // must stay pillarboxed even though cave A would unconstrain 16:9).
+        private void ApplyCineGcvCave(byte[] data)
+        {
+            int site = LocateSignature(data, SigCineGcvCall, ExpCineGcvCall, "Cine GetCameraView call site");
+            int callOff = site + CineGcvCallAt;
+            if (data[callOff] != 0xE8)
+                throw new InvalidOperationException("Cine GetCameraView call site: expected E8.");
+            int oldDisp = BitConverter.ToInt32(data, callOff + 1);
+            int superOff = callOff + 5 + oldDisp;
+
+            byte[] prologue = new byte[] { 0x48, 0x83, 0xEC, 0x28 };
+            byte[] epilogue = new byte[] { 0x48, 0x83, 0xC4, 0x28, 0x80, 0x4F, 0x4C, 0x01, 0xC3 };
+            int cave = FindCodeCave(data, prologue.Length + 5 + epilogue.Length + 8);
+
+            Array.Copy(prologue, 0, data, cave, prologue.Length);
+            int caveCall = cave + prologue.Length;
+            data[caveCall] = 0xE8;
+            BitConverter.GetBytes(superOff - (caveCall + 5)).CopyTo(data, caveCall + 1);
+            epilogue.CopyTo(data, caveCall + 5);
+            BitConverter.GetBytes(cave - (callOff + 5)).CopyTo(data, callOff + 1);
+            Log(string.Format("Patched: cine (loading) views forced 16:9 via cave @ 0x{0:X} (call site 0x{1:X})", cave, callOff));
+        }
+
+        private static void ParseSig(string sig, out byte[] pat, out bool[] mask)
+        {
+            string[] parts = sig.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            pat = new byte[parts.Length];
+            mask = new bool[parts.Length];
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (parts[i] == "??") { pat[i] = 0; mask[i] = false; }
+                else { pat[i] = Convert.ToByte(parts[i], 16); mask[i] = true; }
+            }
+        }
+
+        private static bool MatchesAt(byte[] data, int off, byte[] pat, bool[] mask)
+        {
+            if (off < 0 || off + pat.Length > data.Length) return false;
+            for (int j = 0; j < pat.Length; j++)
+                if (mask[j] && data[off + j] != pat[j]) return false;
+            return true;
+        }
+
+        // Locate a patch site: prefer the known offset if its bytes still match,
+        // otherwise fall back to a unique full signature scan.
+        private int LocateSignature(byte[] data, string sig, int expectedOffset, string name)
+        {
+            byte[] pat; bool[] mask;
+            ParseSig(sig, out pat, out mask);
+            if (MatchesAt(data, expectedOffset, pat, mask)) return expectedOffset;
+
+            int found = -1;
+            for (int i = 0; i <= data.Length - pat.Length; i++)
+            {
+                if (MatchesAt(data, i, pat, mask))
+                {
+                    if (found >= 0)
+                        throw new InvalidOperationException("Signature for '" + name + "' is ambiguous.");
+                    found = i;
+                }
+            }
+            if (found < 0)
+                throw new InvalidOperationException("Signature for '" + name + "' not found. Unsupported game version.");
+            Log(string.Format("Note: '{0}' moved to file offset 0x{1:X} (game update?).", name, found));
+            return found;
+        }
+
+        private void ApplyHorPlusPatches(byte[] data, byte[] targetAspectBytes)
+        {
+            int a = LocateSignature(data, SigUnconstrain, ExpUnconstrain, "Unconstrain cameras");
+            Array.Copy(PatchUnconstrain, 0, data, a, PatchUnconstrain.Length);
+            Log(string.Format("Patched: Unconstrain cameras (GetCameraView) @ 0x{0:X}", a));
+
+            int b = LocateSignature(data, SigAxisBranch, ExpAxisBranch, "Force MaintainYFOV branch");
+            data[b + 6] = 0xFF;   // cmp dl,2 -> cmp dl,0xFF (MajorAxisFOV check dead)
+            data[b + 15] = 0xFF;  // cmp dl,1 -> cmp dl,0xFF (MaintainXFOV check dead)
+            Log(string.Format("Patched: Force Hor+ MaintainYFOV branch @ 0x{0:X}", b));
+
+            int c = LocateSignature(data, SigPhotoTable, ExpPhotoTable, "Photo projection table");
+            Array.Copy(targetAspectBytes, 0, data, c + 8, 4);
+            Log(string.Format("Patched: Photo projection table @ 0x{0:X}", c + 8));
+        }
+
         public MainForm()
         {
             InitializeComponent();
@@ -196,14 +385,16 @@ namespace LiSUltrawidePatcher
             cmbCutsceneMode.ForeColor = Color.White;
             cmbCutsceneMode.Location = new Point(20, 188);
             cmbCutsceneMode.Size = new Size(533, 26);
-            cmbCutsceneMode.Items.Add("Recommended: Uncropped 16:9 Cutscenes (0% Vertical Crop / Full Headroom)");
-            cmbCutsceneMode.Items.Add("Full Ultrawide Cutscenes (Edge-to-Edge with ~20% Lens Crop)");
+            cmbCutsceneMode.Items.Add("Recommended: Hor+ Cutscenes + Classic Ultrawide Exploration/Photos/Loading");
+            cmbCutsceneMode.Items.Add("True Hor+ Everywhere (experimental; photos may skew, loading pop-in visible)");
+            cmbCutsceneMode.Items.Add("Legacy: Uncropped 16:9 Cutscenes (Pillarboxed Cinematics)");
+            cmbCutsceneMode.Items.Add("Legacy: Full Ultrawide Cutscenes (Edge-to-Edge with ~20% Lens Crop)");
             cmbCutsceneMode.SelectedIndex = 0;
             cmbCutsceneMode.SelectedIndexChanged += (s, e) => UpdateHexPreview();
             this.Controls.Add(cmbCutsceneMode);
 
             lblHexResult = new Label();
-            lblHexResult.Text = "Aspect Ratio: 2.37037 (Hex: 26 B4 17 40) | Mode: Uncropped 16:9 Cutscenes";
+            lblHexResult.Text = "Aspect Ratio: 2.37037 (Hex: 26 B4 17 40) | Mode: Hor+ Cutscenes + Classic";
             lblHexResult.Font = new Font("Consolas", 9f, FontStyle.Bold);
             lblHexResult.ForeColor = Color.FromArgb(255, 190, 80);
             lblHexResult.Location = new Point(20, 222);
@@ -329,7 +520,14 @@ namespace LiSUltrawidePatcher
             float ratio;
             byte[] bytes = GetTargetHexBytes(out ratio);
             string hexStr = BitConverter.ToString(bytes).Replace("-", " ");
-            string modeStr = cmbCutsceneMode.SelectedIndex == 0 ? "Uncropped 16:9 Cutscenes" : "Full Ultrawide Cutscenes";
+            string modeStr;
+            switch (cmbCutsceneMode.SelectedIndex)
+            {
+                case 1: modeStr = "True Hor+ Everywhere (experimental)"; break;
+                case 2: modeStr = "Legacy Uncropped 16:9 Cutscenes"; break;
+                case 3: modeStr = "Legacy Full Ultrawide (Vert-)"; break;
+                default: modeStr = "Hor+ Cutscenes + Classic"; break;
+            }
             lblHexResult.Text = string.Format("Aspect Ratio: {0:F6} ({1}) | Mode: {2}", ratio, hexStr, modeStr);
         }
 
@@ -360,10 +558,10 @@ namespace LiSUltrawidePatcher
                 float targetRatio;
                 byte[] targetBytes = GetTargetHexBytes(out targetRatio);
                 string targetHexStr = BitConverter.ToString(targetBytes).Replace("-", " ");
-                bool isCleanMode = cmbCutsceneMode.SelectedIndex == 0;
+                int mode = cmbCutsceneMode.SelectedIndex; // 0=hybrid, 1=Hor+ exe-only, 2=legacy clean, 3=legacy full
 
-                Log(string.Format("Starting patch -> Aspect Ratio: {0:F6} ({1}) | Cutscene Mode: {2}...",
-                    targetRatio, targetHexStr, isCleanMode ? "Uncropped 16:9" : "Full Ultrawide"));
+                Log(string.Format("Starting patch -> Aspect Ratio: {0:F6} ({1}) | Mode index: {2}...",
+                    targetRatio, targetHexStr, mode));
 
                 string backupPath = exePath + ".original";
                 if (!File.Exists(backupPath))
@@ -375,17 +573,45 @@ namespace LiSUltrawidePatcher
                 // Always read from clean original backup to ensure pristine patch
                 byte[] data = File.ReadAllBytes(backupPath);
 
-                int[] offsetsToPatch = isCleanMode ? CleanAspectOffsets : AllAspectOffsets;
-                int aspectPatched = 0;
-                foreach (int off in offsetsToPatch)
+                if (mode == 0)
                 {
-                    if (off + 4 <= data.Length)
-                    {
-                        Array.Copy(targetBytes, 0, data, off, 4);
-                        aspectPatched++;
-                    }
+                    // Cine mode: exactly the proven classic behavior for
+                    // exploration, photos and loading (constrained full-width
+                    // player camera + matching photo table), plus Hor+
+                    // cutscenes via the cine-only constructor patch.
+                    foreach (int off in CleanAspectOffsets)
+                        if (off + 4 <= data.Length)
+                            Array.Copy(targetBytes, 0, data, off, 4);
+                    Log("Patched: player camera + photo table aspect constants (classic behavior).");
+
+                    int b0 = LocateSignature(data, SigAxisBranch, ExpAxisBranch, "Force MaintainYFOV branch");
+                    data[b0 + 6] = 0xFF;
+                    data[b0 + 15] = 0xFF;
+                    Log(string.Format("Patched: Force Hor+ MaintainYFOV branch @ 0x{0:X}", b0));
+
+                    ApplyAspectGateCave(data);
+                    ApplyCineGcvCave(data);
                 }
-                Log(string.Format("Patched {0} Aspect Ratio locations successfully.", aspectPatched));
+                else if (mode == 1)
+                {
+                    ApplyHorPlusPatches(data, targetBytes);
+                    // 0x23E665C intentionally stays stock: the engine's Hor+ math
+                    // divides by the authored aspect ratio.
+                }
+                else
+                {
+                    int[] offsetsToPatch = mode == 2 ? CleanAspectOffsets : AllAspectOffsets;
+                    int aspectPatched = 0;
+                    foreach (int off in offsetsToPatch)
+                    {
+                        if (off + 4 <= data.Length)
+                        {
+                            Array.Copy(targetBytes, 0, data, off, 4);
+                            aspectPatched++;
+                        }
+                    }
+                    Log(string.Format("Patched {0} Aspect Ratio locations successfully.", aspectPatched));
+                }
 
                 File.WriteAllBytes(exePath, data);
                 Log("SUCCESS: Updated " + Path.GetFileName(exePath));
@@ -402,9 +628,18 @@ namespace LiSUltrawidePatcher
                     }
                 }
 
+                string summary;
+                if (mode == 0)
+                    summary = "Cutscenes & dialogues: True Hor+ Ultrawide (0% vertical crop, no bars)\nExploration, photos, loading: classic proven ultrawide behavior";
+                else if (mode == 1)
+                    summary = "Everything (photo mode included): True Hor+ Ultrawide\n0% vertical crop, no black bars (photos may skew)";
+                else if (mode == 2)
+                    summary = "Exploration & Photos: Ultrawide\nCutscenes: Uncropped 16:9 (pillarboxed)";
+                else
+                    summary = "Everything: Full Ultrawide (~20% vertical crop in cinematics)";
                 MessageBox.Show(
-                    string.Format("Successfully patched to {0:F6}!\n\nExploration & Photos: Ultrawide ({1})\nCutscenes: {2}\n\nLaunch the game to play!",
-                        targetRatio, targetHexStr, isCleanMode ? "Uncropped 16:9 (0% Vertical Crop)" : "Full Ultrawide"),
+                    string.Format("Successfully patched to {0:F6} ({1})!\n\n{2}\n\nLaunch the game to play!",
+                        targetRatio, targetHexStr, summary),
                     "Patch Successful",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
