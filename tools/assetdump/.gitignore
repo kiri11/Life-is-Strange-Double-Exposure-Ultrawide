@@ -1,0 +1,6 @@
+# Third-party binary - fetch per README (WorkingRobot/OodleUE msvc-x64-release.zip)
+oodle-data-shared.dll
+
+# Game-derived artifacts: regenerate locally, do not redistribute
+*.usmap
+*.log

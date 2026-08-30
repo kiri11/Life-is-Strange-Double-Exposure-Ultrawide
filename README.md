@@ -11,8 +11,9 @@ A lightweight, native ultrawide fix for **Life is Strange: Double Exposure** sup
 - **Correct Photo Mechanics:** Max's Polaroid photographs and in-game camera captures retain proper 1:1 proportions without stretching or skewing. The camera UI works unchanged.
 - **No Zoom Bug After Cutscenes:** The engine-level cause of the camera zoom when a cutscene hands control back to the player (Unreal's sequencer can leave the aspect-axis constraint on `MaintainXFOV`) is neutralized at the projection branch.
 - **Fully Static:** A handful of patched bytes in the executable. No runtime hooks, no DLL injection, no Lua mods, no background processes, no performance impact. Behavior-neutral on a 16:9 display.
+- **Full-Width UI (optional second patch):** the loading overlay covers the whole screen instead of leaving the still-streaming world visible at the sides, and HUD elements such as phone notifications sit on the physical screen edge instead of an invisible 16:9 boundary. See "Ultrawide UI Layout" below.
 
-**Known limitation:** during loading transitions, narrow strips of the (still-streaming) world can be visible for a moment at the screen sides. The loading view is the destination scene's own cutscene camera held behind a 16:9-sized loading overlay, so it cannot be pillarboxed without also pillarboxing cutscenes. See "Possible Improvements" below.
+**Known limitation:** returning from a *dialogue* to exploration still shows a brief camera zoom. The equivalent bug after cutscenes is fixed; the dialogue path is not yet covered - see "Possible Improvements".
 
 ## How It Works (Short Version)
 
@@ -87,9 +88,30 @@ r.Streaming.FramesForFullUpdate=1
 
 ---
 
+## Ultrawide UI Layout (Optional Second Patch)
+
+The executable patch fixes the *camera*. The game's UI is a separate problem with a separate cause: `BP_UIWindowManager`'s `WindowParent` - the panel every game window is reparented into - is a fixed **3840x2160 box centred in the viewport**. On a 5120x2160 display that leaves 640 px of dead space on each side, which is why the loading overlay did not cover the screen and why notifications stopped short of the edge. Full analysis in [RESEARCH.md](RESEARCH.md) section 9.
+
+This cannot be an executable byte patch - the value lives in cooked asset data - so it is applied to the IoStore container instead:
+
+```bash
+python tools/assetdump/patch_ui_layout.py --width 5120 --height 2160
+python tools/assetdump/patch_ui_layout.py --restore
+```
+
+**Requirements:** Python 3.6+, `pip install blake3`, and an Oodle decompressor DLL (see [tools/assetdump/README.md](tools/assetdump/README.md)).
+
+The patch rewrites 15 existing floats across 10 widget packages: one widens `WindowParent` to the real UMG design space (`viewport / DPIScale`, where the DPI scale is UE's `ScaleToFit` rule `min(W/3840, H/2160)`), and the rest re-inset the handful of elements an automated audit found positioned by absolute coordinates on the 3840 canvas - the pause title, several fixed-width backgrounds, and the main-menu/title-screen compositions, which are deliberately kept in their authored 16:9 framing rather than dragged to the physical screen edges.
+
+It is **append-only**: modified package chunks are written as new uncompressed blocks at the end of the `.ucas`, the TOC block entries are repointed, and each chunk's BLAKE3 meta hash is recomputed. Existing bytes are never overwritten and `.utoc` is backed up, so `--restore` is exact.
+
+> Do not run Steam's **Verify Integrity of Game Files** while this patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update will also overwrite it; re-run the patcher afterwards.
+
+---
+
 ## Possible Improvements
 
-- **Loading side-peek:** candidate solutions (streaming tuning, loading-overlay widget fix, a minimal runtime load-window mask) are analyzed in RESEARCH.md section 5. The overlay asset route is currently blocked by the game's encrypted IoStore index.
+- **Dialogue-exit camera zoom:** returning from a dialogue to exploration briefly zooms in. The cutscene equivalent is fixed at the projection branch (see "How It Works"), but the dialogue path is not. Leading hypothesis is the view *blend* rather than a leaked axis constraint: `FMinimalViewInfo::BlendViewInfo` propagates `bConstrainAspectRatio` with `|=`, so a blend out of an unconstrained ~1.778 dialogue camera toward the constrained monitor-ratio exploration camera runs the Hor+ path with a mid-blend aspect, and `vFOV = atan(tan(hFOV/2)/aspect)` narrows as that aspect climbs. Unverified - it needs a per-frame recording of `(AspectRatio, bConstrainAspectRatio)` across a dialogue exit.
 - **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside the (1.75, 1.8) gate window; the gate can be extended per report.
 
 ---

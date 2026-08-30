@@ -185,17 +185,21 @@ UE compiles a static projection float table at `0x69C8A8C` (`DF 7C DB 3D 55 55 5
 
 ---
 
-## 5. Known Limitation: The Loading Side-Peek
+## 5. The Loading Side-Peek (RESOLVED)
 
 ### Analysis
-During loading transitions, narrow strips of the still-streaming world can appear briefly at the screen sides. Field triangulation across gate variants (see git history) established: the loading view is **the destination scene's own cutscene-class camera held behind a loading overlay UI that is sized/anchored to 16:9**. The wide camera renders correctly; the overlay just does not cover the extra width. Because the very same camera renders the (wanted-wide) cutscene a moment later, no camera-identity or aspect gate can pillarbox loading without regressing cutscenes - it is a UI/temporal problem, accepted as a cosmetic limitation.
+During loading transitions, narrow strips of the still-streaming world can appear briefly at the screen sides. Field triangulation across gate variants (see git history) established that the loading view is **the destination scene's own cutscene-class camera held behind a loading overlay UI that does not cover the extra width**. The wide camera renders correctly. Because the very same camera renders the (wanted-wide) cutscene a moment later, no camera-identity or aspect gate can pillarbox loading without regressing cutscenes - it is a UI problem, not a camera problem.
+
+**Corrected 2026-08-30 (see section 9):** the earlier assumption that the overlay widget is *itself* authored/anchored at 16:9 is **false**. `BP_LoadingWindow`'s `BlackScreen` image sits in a `CanvasPanelSlot` with anchors `(0,0)-(1,1)`, offsets `(0,0,0,0)` - full viewport stretch. `BP_TransitionWindow`'s `FullscreenImage` is identical. Those widgets would cover an ultrawide viewport correctly. The 16:9 boxing is applied **upstream of the widgets**, at the UI host, and it affects every window (loading, main menu, pause, notifications) uniformly - so it is one shared cause, not a per-asset defect.
 
 ### Candidate Solutions (Future Work)
 1. **Streaming mitigation (`Engine.ini`, low risk, partial):** shrink the ugly window so side content appears already-loaded (still visible, but finished): `r.Streaming.PoolSize=4096`, `r.Streaming.FramesForFullUpdate=1`, optionally `s.AsyncLoadingTimeLimit=10`.
-2. **Loading overlay widget fix (blocked):** stretch the loading UI to full viewport. The game ships UE5 IoStore containers (`pakchunk*.utoc/.ucas`) with an encrypted/hashed directory index - no plaintext asset paths recoverable without the AES key, so identifying and patching the overlay asset is currently impractical.
+2. **Loading overlay widget fix (ruled out, not blocked):** the containers are *not* encrypted and the overlay asset has been read (section 9). The overlay already stretches to the full viewport, so there is nothing to fix in the asset. Superseded by candidate 6.
 3. **Minimal runtime mask (complete fix, needs opt-in):** a load-event-scoped mod (e.g. UE4SS) that, during the load window only, writes the held camera's `AspectRatio` member outside cave A's (1.75, 1.8) window (e.g. 1.9f) and restores it once the level is interactive. One write per load; no per-frame contention with the caves (unlike naive per-tick flag toggling, which visibly fights the game's Blueprint camera system).
 4. **Native temporal gate (advanced):** extend cave A with a "recently loaded" check - needs a writable storage slot (new RW PE section; `.text` is R-X), a reset signal hooked into a once-per-load code path, and a time source such as `GFrameCounter`. Feasible but disproportionate.
 5. **Diagnostics:** a recorder cave appending (vtable, AspectRatio, constrain) tuples per view into an RW ring buffer, dumped externally via `ReadProcessMemory` - maps camera classes to on-screen moments with certainty, without any runtime mod inside the game.
+6. **UI host width (SOLVED - see 9c/9c-1):** `BP_UIWindowManager`'s `WindowParent` slot is a fixed 3840x2160 centred box that clips every window to 16:9. Widening it to `2160 * monitorAspect` makes the loading overlay cover the side strips by itself and puts right-anchored HUD elements on the real screen edge - both open issues close at once. Ships as an IoStore mod, not an exe patch.
+7. **Native temporal gate, revised:** section 5.4 assumed a `GFrameCounter` heuristic and a new RW PE section, and was judged disproportionate. Two facts soften it: `UChronosLoadingWindow` is a *native* class, so its construct/destruct is a clean, exact load-window signal rather than a heuristic; and `.data` alignment padding is already writable, so no new PE section is needed - one flag byte plus two small caves, with cave A consulting the flag. Still more RE work than candidate 6, but it is the exe-only route if shipping assets is undesirable.
 
 ---
 
@@ -229,3 +233,172 @@ During loading transitions, narrow strips of the still-streaming world can appea
 
 1. **`patcher.py`** - cross-platform Python 3.6+ patcher, zero dependencies. Modes: `cine` (recommended), `horplus`, `hybrid`, `clean`, `full` (see `--help`), `stock` (restore). Signature-scan fallback for game updates; always patches from the pristine `.original` backup so modes never stack.
 2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`): auto-detects the game executable and monitor resolution, applies the recommended mode, 1-click restore.
+
+---
+
+## 9. Asset Pipeline and the UI Layer
+
+Everything in this section was verified on 2026-08-30 by reading the shipped containers directly. The reader used is in `tools/assetdump/` (pure Python; the only external dependency is an Oodle decompressor DLL).
+
+### 9a. The Containers Are Not Encrypted
+
+Section 5 previously stated that the IoStore directory index is encrypted and that asset paths are unrecoverable without an AES key. **That is wrong.** Decoded `FIoStoreTocHeader` for `pakchunk0-Windows.utoc`:
+
+```
+Version                5
+TocEntryCount          56411
+CompressionBlockCount  675076        CompressionMethod = Oodle
+DirectoryIndexSize     2550433
+ContainerFlags         0x09  = Compressed(0x01) | Indexed(0x08)
+                             ... Encrypted(0x02) NOT set, Signed(0x04) NOT set
+EncryptionKeyGuid      00000000-0000-0000-0000-000000000000
+```
+
+The directory index parses as plaintext with no key: **50,983 asset paths from `pakchunk0`, 8,843 from `pakchunk1`**. `pakchunk0-Windows.pak` (UE pak version 11) likewise carries a plaintext index and holds the cooked `.ini` config.
+
+The real obstacle was never encryption - it is that UE 5.2 links Oodle statically into the shipping exe, so no `oo2core_*.dll` ships with the game. A standalone decompressor from Epic's Oodle-for-UE source build (`WorkingRobot/OodleUE`, `bin/oodle-data-shared.dll`) supplies `OodleLZ_Decompress` and everything opens. Containers are also unsigned, and UE mounts `.pak`/`.utoc` recursively under `Content/Paks`, so loose asset mods mount natively - this install already carries one (`Content/Paks/Mods/PSButtons-3161.*`).
+
+Cooked packages use unversioned property serialization (`PackageFlags=0x80002200` = `FilterEditorOnly|UnversionedProperties|Cooked`, `bHasVersioningInfo=0`), so *general* property editing needs a `.usmap` (UE4SS `dumpusmap` or Dumper-7). Package structure - name map, imports, exports, class names, outer chains - decodes without one, and so do individual structs whose schema order is known.
+
+### 9b. Verified Widget Layout
+
+`BP_LoadingWindow` (`Chronos/Content/UI/BP/Window/`), full export map: root `D9CanvasPanel` under `WidgetTree`, children `BlackScreen` (`UMG.Image`) and `LoadingVisuals` (`D9CanvasPanel`), the latter holding `D9Image`, `D9RichTextBlock` and `AnimatedImage`. **No `ScaleBox`, `SizeBox` or `SafeZone` anywhere.** Decoded `UCanvasPanelSlot` layout data:
+
+| Parent | Child | Anchors | Offsets | Alignment |
+|---|---|---|---|---|
+| `D9CanvasPanel` | `BlackScreen` | (0,0)-(1,1) | 0,0,0,0 | 0,0 |
+| `D9CanvasPanel` | `LoadingVisuals` | (0,0)-(1,1) | 0,0,0,0 | 0,0 |
+| `LoadingVisuals` | `D9Image` | (0,0)-(1,1) | 0,0,0,0 | 0,0 |
+| `LoadingVisuals` | `D9RichTextBlock` | (0,1)-(0,1) | 374,-174,100,100 | 0,1 |
+| `LoadingVisuals` | `AnimatedImage` | (0,1)-(0,1) | 220,-140,97,136 | 0,1 |
+
+The black plate is a full-viewport stretch. `BP_TransitionWindow`'s `FullscreenImage` is the same. Neither asset can be the reason the sides are exposed.
+
+`BP_NotificationWindow` is equally innocent: `MainPanel -> NotificationPanel` at anchors `(1,0)-(1,0)`, alignment `(1,0)` - anchored and aligned to the **right edge of the viewport**, not to any fixed coordinate. `BP_Notification_SMS` likewise pins its content with `(1,*)` anchors. If the UI host spanned the viewport, these would already sit on the physical right edge at any aspect ratio.
+
+`BP_PauseWindow` fixes the design canvas: `MainButtons -> Pause` carries offsets `(1920, 590, 300, 80)` at anchor `(0,0)` with alignment `(0.5,0)`, and `VignetteTop`/`VignetteBottom` split at `Y=1080`. **The UI is authored on a 3840x2160 canvas** (1920 = its horizontal centre, 1080 = its vertical centre).
+
+### 9c. Where the 16:9 Boxing Comes From - SOLVED
+
+`Chronos/Config/DefaultEngine.ini` (extracted from `pakchunk0-Windows.pak`):
+
+```ini
+[/Script/Engine.UserInterfaceSettings]
+UIScaleRule=ScaleToFit
+DesignScreenSize=(X=3840,Y=2160)
+UIScaleCurve=(... ExternalCurve=CurveFloat "/Game/UI/Data/FC_UI_DPI_Scale.FC_UI_DPI_Scale")
+```
+
+`FC_UI_DPI_Scale` decodes to keys `(0, 0.25) (620, 0.5) (1080, 0.5, constant) (1440, 1.0) (2160, 1.0)`.
+
+This is **not** the cause. `EUIScalingRule::ScaleToFit` computes `min(W/3840, H/2160)` and ignores the curve; at 5120x2160 that is `min(1.333, 1.0) = 1.0`, confirmed at runtime (`viewportSize=5120x2160  dpiScale=1.0`). A DPI scale of 1.0 makes UMG's design space equal the real viewport, so config overrides cannot move anything - and because the rule is height-bound, the scale is 1.0 at *every* aspect wider than 16:9. Config is ruled out. So is `UChronosUISceneTextureSubsystem`, whose entire reflected surface is a single `MaterialParamColl` object - it feeds material parameters, it does not composite the UI through a render target. A keyword sweep of the whole `.usmap` also confirms **no Deck Nine class has any aspect, safe-zone, letterbox or design-size property**.
+
+The cause is a single hardcoded slot in `Chronos/Content/UI/BP/BP_UIWindowManager.uasset`:
+
+```
+WidgetTree.RootWidget = ScaleBox        (Stretch not serialized -> CDO default, ScaleToFit)
+  \- WindowManager (UMG.CanvasPanel)
+       |- GameStyle
+       |- WindowParent (D9Runtime.D9CanvasPanel)
+       |       anchors = (0.5,0.5)-(0.5,0.5)   alignment = (0.5,0.5)
+       |       offsets = (0, 0, 3840, 2160)             <-- THE BUG
+       |    |- InputBlocker    anchors (0,0)-(1,1) offsets 0        full stretch
+       |    |- SharedBGPanel   anchors (0,0)-(1,1) offsets 0        full stretch
+       |    |    \- Darken / BackgroundBlur / ModalDarkenBG        full stretch
+       |    \- BuildInfoLabel anchors (1,0)-(1,0) alignment (1,0)
+       \- WatermarkLabel
+```
+
+`WindowParent` is the `D9UIWindowManager::WindowParent` member - the panel **every** game window is reparented into at runtime. A point-anchored slot with alignment `(0.5,0.5)` and offsets `(0,0,3840,2160)` is a **fixed 3840x2160 box centred in the viewport**. At 5120x2160 with DPI scale 1.0 that leaves 640 px of dead space on each side, and every window inside it - loading, transition, main menu, pause, notifications - is clipped to exactly 16:9 no matter how correctly its own slots are anchored. One slot explains every symptom.
+
+The root `ScaleBox` reinforces it: with the default `ScaleToFit` it scales its content by the content's own desired size, which `WindowParent`'s fixed 3840x2160 supplies.
+
+### 9c-1. The Fix and Its Trade-off
+
+The design space is always `2160 * aspect` wide by 2160 tall for any aspect at or above 16:9 (the `ScaleToFit` DPI rule is height-bound). So the minimal, mechanism-preserving change is **one float** in `WindowParent`'s `CanvasPanelSlot`:
+
+```
+offsets.Right : 3840.0  ->  2160 * monitorAspect
+                            5120  @ 21.33:9      5160  @ 3440x1440
+                            7680  @ 32:9         6912  @ 32:10
+```
+
+That keeps the existing centred-box mechanism intact and simply sizes the box to the real design space, so `ScaleToFit` resolves to scale 1.0 filling the viewport exactly. Full-stretch children (the loading `BlackScreen`, `SharedBGPanel`) then cover the whole screen, and edge-anchored children (`NotificationPanel` at `(1,0)`, `BuildInfoLabel` at `(1,0)`) land on the physical screen edge.
+
+**Trade-off to test:** widening `WindowParent` moves its local origin 640 px left, so any descendant positioned by *absolute offsets* rather than fractional anchors shifts with it. `BP_PauseWindow`'s `MainButtons -> Pause` is a known example - anchor `(0,0)`, offsets `(1920, 590, 300, 80)`, alignment `(0.5,0)` - i.e. centred by hardcoding half of 3840. After the change it would sit 640 px left of centre. Elements using fractional anchors (the great majority, including `MainButtons -> D9VerticalBox` at `(0.5,0.5)`) are unaffected. The blast radius is enumerable statically: scan every `BP_*Window` for point-anchored slots whose offsets cluster near 1920/3840 and adjust that handful.
+
+### 9c-2. Blast-Radius Audit
+
+`tools/assetdump/audit_offsets.py` walks every widget package under `Chronos/Content/UI/`, decodes each `UCanvasPanelSlot`, resolves the in-package ancestor chain, and reports the slots whose horizontal placement is tied to the 3840 canvas. Result over **197 packages / 1847 slots**, for a 5120x2160 target (origin shifts 640 px left):
+
+| Class | Count | Meaning | Action |
+|---|---|---|---|
+| `HIGH` | 1 | centred by hardcoding half of 3840 | fix |
+| `FIXW` | 6 | fixed 3840-wide and *not* centred - stops spanning the widened parent | fix |
+| `MED` | 108 | positioned by an absolute X on the 3840 canvas | mostly covered by one upstream change, see below |
+| `BOX` | 31 | a deliberate, *centred* 3840x2160 box | none - stays a 16:9 island exactly as today |
+
+The `BOX` class is the key discovery: **the centred 3840x2160 slot is a recurring Deck Nine idiom**, used 38 times across the UI (`BP_SettingsWindow`, all seven `BP_KeybindingSettings*`, the `BP_PlayerChoices*` family, `BP_PhotographyWindow` backgrounds, and three of the six player-menu tabs). Those screens are self-protecting: widening the master `WindowParent` leaves them centred 16:9 islands, i.e. visually unchanged.
+
+The 7 slots that genuinely need a value change:
+
+```
+[HIGH] BP_PauseWindow             MainButtons -> Pause        anchor(0,*) align(0.5,*) offsets=(1920,590,300,80)
+[FIXW] BP_SettingsWindow          MainPanel   -> Background                 fixed 3840x2162 at (0,0)
+[FIXW] BP_SaveSelectWindow        MainPanel   -> D9Image                    fixed 3840x2160 at (0,0)
+[FIXW] BP_SquareEnixAccountWindow MainPanel   -> CanvasPanel_Background     fixed 3840x2162 at (0,0)
+[FIXW] BP_SquareEnixAccountWindow MainPanel   -> WidgetSwitcher_CurrentView fixed 3840x2162 at (0,0)
+[FIXW] BP_UISettings              MainPanel   -> Buttons                    fixed 3840x2160 at (0,0)
+[FIXW] BP_CollectiblePosterUI     ReadPanel   -> D9Image                    fixed 3840x2160 at (0,0)
+[FIXW] BP_ShiftChoiceUI           ChoicesMenu -> ChoiceButton               fixed 3840x2160 at (0,1)
+```
+
+Each is a one-value edit: convert `HIGH` to a fractional anchor (`anchorX 0 -> 0.5`, `offsets.Left 1920 -> 0`), and convert each `FIXW` to a horizontal stretch (`anchorMax.X 0 -> 1`, width offset -> 0).
+
+**93 of the 108 `MED` findings live under `BP/Controls/PlayerMenu/`** - journal pages and menu tabs. `BP_PlayerMenuWindow`'s `ContentPanel` already boxes three of its six tabs (`ObjectivesTabUI`, `CluesTabUI`, `SocialMediaTabUI` at the centred 3840x2160 idiom) while `JournalTabUI`, `SMSTabUI` and `CollectiblesTabUI` are full-stretch. Giving those three the same centred box their siblings already have is **three slot edits that neutralise the whole 93** - and it matches the game's own convention rather than inventing one.
+
+That leaves roughly a dozen individually-placed `MED` slots (7 in `BP/Window`, 6 button controls, 2 player-choice controls) to eyeball in-game after the change.
+
+**Caveat on the numbers:** `chain_preserves_width` resolves ancestors only *within* a package. A control whose host in another package is itself a fixed box does not move, so `MED` is an upper bound; the `BOX` inventory above is what resolves most of those cases by hand.
+
+There is no exe-side equivalent - the value lives in cooked asset data, so this is the one part of the fix that cannot be a byte patch. See 9c-3 for how it is actually delivered.
+
+
+### 9c-3. Implementation - `tools/assetdump/patch_ui_layout.py`
+
+Delivered as an in-place container patch rather than a loose IoStore mod: writing a valid patch container means authoring an `FIoContainerHeader` with package store entries, whereas every edit needed here rewrites an *existing* float, so package sizes never change and the container can simply be repointed.
+
+Method, per modified package:
+
+1. read and decompress the package chunk, decode the target `UCanvasPanelSlot` (located by the widget its `Content` points at, never by hardcoded offsets, so it survives game updates);
+2. verify the current value matches the expected old value, and that the float occurs exactly once in the slot payload;
+3. write the new float, append the whole chunk to the end of the `.ucas` as a new **uncompressed** block (compression method index 0 is always valid);
+4. repoint that chunk's compression-block entry in the TOC (offset / size / method);
+5. recompute the chunk's meta hash - **BLAKE3 truncated to 20 bytes**, identified by reproducing a stock chunk's stored hash exactly;
+6. re-read every edited slot back through the container reader as a verification pass.
+
+Nothing existing is ever overwritten. `.utoc` is copied to `.utoc.original` and the original `.ucas` length is recorded, so `--restore` is exact and re-runs always start from the pristine container.
+
+The 15 edits, all derived from the design space rather than hardcoded:
+
+| Package | Slot | Field | Change |
+|---|---|---|---|
+| `BP_UIWindowManager` | `WindowParent` | Right | `3840 -> designW` |
+| `BP_PauseWindow` | `Pause` | Left | `1920 -> designW/2` |
+| `BP_SettingsWindow` | `Background` | Right | `3840 -> designW` |
+| `BP_SaveSelectWindow` | `D9Image` | Right | `3840 -> designW` |
+| `BP_SquareEnixAccountWindow` | `CanvasPanel_Background`, `WidgetSwitcher_CurrentView` | Right | `3840 -> designW` |
+| `BP_UISettings` | `Buttons` | Right | `3840 -> designW` |
+| `BP_CollectiblePosterUI` | `D9Image` | Right | `3840 -> designW` |
+| `BP_ShiftChoiceUI` | `ChoiceButton` | Right | `3840 -> designW` |
+| `BP_MainMenuWindow` | `MainButtons`, `D9Image`, `GamerTag` | Left | `+ (designW-3840)/2` |
+| `BP_MainMenuWindow` | `InfocastPanel` | Left | `- (designW-3840)/2` |
+| `BP_TitleWindow` | `GamerTag`, `PressAnyKey` | Left | `+ (designW-3840)/2` |
+
+The main-menu and title screens are full-bleed compositions with no 3840 box to widen - their elements are inset from the box edges, so widening dragged them onto the physical screen edge. Re-inseting restores Deck Nine's authored framing; this is a deliberate choice to keep those two screens 16:9-composed rather than a limitation.
+
+**Field-verified at 5120x2160:** loading overlay covers the full width (side-peek gone), phone notifications sit on the physical right edge, pause title centred, main menu back to its authored 16:9 composition. The three full-stretch player-menu tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are *not* patched - boxing them the way their three siblings already are would need a structural edit (adding serialized properties, which changes package size). They are the known remaining gap in this pass.
+
+### 9d. Binary Reference - UI Classes
+
+Native window classes recovered from the exe's UTF-16 string table: `UUIWindow`, `UOverlayUIWindow`, `UModalUIWindow`, `UUIObjectWindow`, `UUIWindowLogic`, `UIWindowProps`, `UD9UIWindowManager`, `UChronosUIWindowManager`, `UChronosUISceneTextureSubsystem`, plus one `UChronos*Window` / `U*Window` pair per screen (`UChronosLoadingWindow`, `UChronosNotificationWindow`, `UChronosMainMenuWindow`, `UChronosPauseWindow`, ...). `UScaleBox`, `USafeZone` and their slots are linked in but unused by the windows inspected so far.
