@@ -124,7 +124,16 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 - **The full-width UI step was skipped:** it needs `blake3` and an Oodle DLL (see Installation). Use `uv run patcher.py` to get `blake3` automatically.
 - **Everything looks wrong after a game update:** all code sites are located by unique byte signatures and the patcher reports cleanly if the game version is unsupported. Re-run the installer after updates.
 - **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
-- **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
+- **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
+
+### Still broken? Open an issue
+
+[Open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) with as much detail as you can. What helps most:
+
+- **What you did** - GUI or command line, which of the four options were ticked, and whether the game had been patched before.
+- **What is wrong and where** - the scene, menu or moment it happens in, what you see versus what you expected, and a screenshot or clip if you can take one.
+- **Your setup** - display resolution, and whether the game is the Steam, Epic or another copy.
+- **What the installer said** - the whole GUI log box or the console output, plus the output of `python patcher.py --check-exe`, which reports the path it found and whether that executable is stock, patched or unrecognised.
 
 ---
 
