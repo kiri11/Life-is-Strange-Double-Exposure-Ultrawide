@@ -10,7 +10,7 @@ Both methods run the same code - the GUI is a thin front-end over `patcher.py`, 
 
 ### Method 1: Windows GUI
 
-1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/archive/refs/heads/main.zip)** and unpack the zip anywhere.
+1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix.zip)** and unpack the zip anywhere.
 2. Run **`LiSUltrawidePatcher.exe`** (keep it next to `patcher.py`).
 3. It finds your game installation and your display automatically - but if it does not find the game, use the **Browse...** button to select the game executable.
 4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
@@ -142,6 +142,14 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 ## Technical Documentation & Research
 
 For the reverse-engineering breakdown, Unreal Engine 5 projection-matrix analysis, disassembly of the patched sites, the asset-container tooling, the runtime camera measurements, the open work still on the table, and the dead ends explored, see **[RESEARCH.md](RESEARCH.md)**. Historical iterations of this fix are preserved in git history.
+
+### Building the GUI yourself
+
+The repository holds no executable. `LiSUltrawidePatcher.exe` is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) by [the release workflow](.github/workflows/build.yml) on every push to `main`, and each release names the commit it was built from - so the download can always be traced back to the source, and the two cannot drift apart. Building it yourself needs no SDK, just the compiler that ships with Windows:
+
+```
+%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32icon:LiSUltrawidePatcher.ico /out:LiSUltrawidePatcher.exe LiSUltrawidePatcher.cs /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
+```
 
 ---
 

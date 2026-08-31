@@ -1,0 +1,93 @@
+# Builds LiSUltrawidePatcher.exe from LiSUltrawidePatcher.cs and, for pushes to
+# main, publishes it as a release. The exe is deliberately NOT in the repository:
+# a committed binary drifts from the source next to it, and nobody can tell by
+# looking. Here the only exe that exists is the one this file just compiled.
+#
+# Every push to main cuts its own release and no release is ever overwritten, so
+# a build that turns out bad can always be compared against the one before it.
+# Put [skip ci] in the commit subject to push without releasing.
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The stock .NET Framework compiler, present on every Windows image and on
+      # every Windows the fix targets. No SDK, no csproj, no restore step. Keep
+      # this line and the one in LiSUltrawidePatcher.cs's header identical.
+      - name: Compile LiSUltrawidePatcher.exe
+        shell: cmd
+        run: >
+          "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe
+          /win32icon:LiSUltrawidePatcher.ico
+          /out:LiSUltrawidePatcher.exe LiSUltrawidePatcher.cs
+          /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll
+          /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
+
+      # What a user needs to run the fix, and nothing else. tools/assetdump is
+      # not optional: patcher.py shells out to patch_ui_layout.py for the
+      # full-width UI step and drops the Oodle DLL in that same folder, so a zip
+      # without it silently installs three of the four parts. The research
+      # scripts (audit_offsets, pak, usmap), RESEARCH.md and make_icon.py are
+      # not on the runtime path and stay in the repository only.
+      - name: Stage the release files
+        shell: pwsh
+        run: |
+          $root = 'staging/LiS-Ultrawide-Fix'
+          New-Item -ItemType Directory -Path "$root/tools/assetdump" -Force | Out-Null
+          $top = @(
+            'LiSUltrawidePatcher.exe',   # the GUI front-end, built above
+            'patcher.py',                # the installer, and all the patch logic
+            'README.md',                 # install and troubleshooting instructions
+            'LICENSE'                    # GPL-3.0: the binary must carry its terms
+          )
+          $assetdump = @(
+            'patch_ui_layout.py',        # entry point patcher.py invokes
+            'iostore.py', 'zen.py', 'slots.py', 'unver.py',  # container readers
+            'oodle.py',                  # loads the decompressor patcher.py fetches
+            'blake3_pure.py',            # stdlib BLAKE3, so no wheel is required
+            'README.md'                  # where to get Oodle if the fetch fails
+          )
+          foreach ($f in $top) { Copy-Item $f "$root/$f" }
+          foreach ($f in $assetdump) { Copy-Item "tools/assetdump/$f" "$root/tools/assetdump/$f" }
+          Compress-Archive -Path $root -DestinationPath 'LiS-Ultrawide-Fix.zip'
+          Get-ChildItem -Recurse $root | Select-Object FullName, Length
+
+      # Available on pull requests too, so a build can be tested before it ships.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiS-Ultrawide-Fix
+          path: staging/LiS-Ultrawide-Fix
+
+      # The tag is date plus run number: readable, ordered, and unique even for
+      # two pushes on the same day, so no release ever replaces another. The zip
+      # keeps a fixed name, which is what makes the README's /releases/latest/
+      # download link work for every future release without being edited.
+      - name: Publish the release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'v{0}.{1}' -f (Get-Date -Format 'yyyy.MM.dd'), '${{ github.run_number }}'
+          $run = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          $notes = @(
+            (git log -1 --pretty=%s),
+            '',
+            'Download **LiS-Ultrawide-Fix.zip** below, unpack it anywhere and run `LiSUltrawidePatcher.exe`.',
+            '',
+            ('Built from `${{ github.sha }}` by [this run](' + $run + ').')
+          ) -join "`n"
+          gh release create $tag 'LiS-Ultrawide-Fix.zip' --title $tag --notes $notes

@@ -219,3 +219,6 @@ __marimo__/
 
 # the private interpreter the GUI downloads when the machine has no Python
 /tools/python/
+
+# built by .github/workflows/build.yml, and shipped only in releases
+/LiSUltrawidePatcher.exe
