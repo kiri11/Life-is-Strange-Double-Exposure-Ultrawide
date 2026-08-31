@@ -20,7 +20,9 @@ Four independent parts, all on by default:
   4. Anti-blur TSR settings   } user's Engine.ini, removed again by --restore
 
 `uv run` is the easiest entry point: it needs no venv and fetches the one
-optional dependency (blake3, used only by part 2) automatically.
+optional dependency (blake3, used only by part 2) automatically - though
+nothing needs it: without the compiled module part 2 falls back to the pure
+Python BLAKE3 in tools/assetdump/, so the stdlib alone is enough.
 
 Advanced: --mode patches only the executable, in one of the legacy modes
 (cine, horplus, hybrid, clean, full, stock). cine is the shipped behaviour.
@@ -1136,18 +1138,6 @@ def paks_dir_for(exe_path):
     return os.path.join(chronos, "Content", "Paks")
 
 
-def game_files_requirements():
-    """-> (ok, [missing]) for dependencies this installer cannot resolve itself."""
-    missing = []
-    try:
-        import blake3  # noqa: F401
-    except ImportError:
-        missing.append("the 'blake3' module - run this installer with "
-                       "'uv run patcher.py' and it is fetched automatically, "
-                       "or 'pip install blake3'")
-    return (not missing), missing
-
-
 def apply_game_files(exe_path, width, height, restore=False, oodle_dll=None):
     import subprocess
     here = os.path.dirname(os.path.abspath(__file__))
@@ -1235,17 +1225,12 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
 
     print("\n[2/3] Full-width UI (game files)")
     if do_files:
-        good, missing = game_files_requirements()
-        oodle = ensure_oodle(exe_path, fetch_oodle_ok) if good else None
-        if good and oodle:
+        oodle = ensure_oodle(exe_path, fetch_oodle_ok)
+        if oodle:
             print("  using Oodle: {}".format(oodle))
             ok = apply_game_files(exe_path, width, height, oodle_dll=oodle) and ok
         else:
-            print("  !! skipped - this step also needs:")
-            for m in missing:
-                print("       - " + m)
-            if good and not oodle:
-                print("       - an Oodle decompressor (none found, none fetched)")
+            print("  !! skipped - no Oodle decompressor is available.")
             print("     Everything else was still applied.")
             ok = False
     else:

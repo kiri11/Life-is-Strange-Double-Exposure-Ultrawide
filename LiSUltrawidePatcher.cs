@@ -8,9 +8,10 @@
 // this structure prevents.
 //
 // It prefers `uv run`, which needs no virtualenv and fetches the one optional
-// dependency (blake3, used by the game-files step) automatically. If uv is not
-// installed it falls back to the Python launcher and then to plain python, and
-// can offer to run uv's official installer when neither is available.
+// dependency (blake3, used by the game-files step) automatically. Failing that
+// it uses the Python launcher, then plain python, and on a machine with no
+// Python at all it downloads python.org's embeddable build into tools/python
+// and runs the patcher with that - so the fix works either way.
 //
 // Build (stock .NET Framework compiler, no SDK required):
 //   %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe ^
@@ -26,6 +27,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -659,7 +662,8 @@ namespace LiSUltrawidePatcher
                 case "norunner":
                     SetExeStatus("", SystemColors.GrayText,
                                  "Not checked - no Python found yet.",
-                                 "Install or Restore still works: it can fetch uv for you.");
+                                 "Install or Restore still works: it fetches a private "
+                                 + "Python if this machine has none.");
                     break;
                 case "noscript":
                     SetExeStatus("", SystemColors.GrayText,
@@ -684,8 +688,10 @@ namespace LiSUltrawidePatcher
             tail.Append(" --check-exe --exe ").Append('"').Append(path).Append('"');
 
             string exe, args;
+            string own = EmbeddedPython();
             if (Which("py") != null) { exe = "py"; args = "-3 " + tail; }
             else if (Which("python") != null) { exe = "python"; args = tail.ToString(); }
+            else if (own != null) { exe = own; args = tail.ToString(); }
             else
             {
                 string uv = uvCheckAllowed ? FindUv() : null;
@@ -726,15 +732,63 @@ namespace LiSUltrawidePatcher
             StartExeCheck();
         }
 
-        // uv is the preferred runner: it needs no virtualenv, fetches the one
-        // optional dependency (blake3) itself, AND will download a Python
-        // interpreter if the machine has none - so fetching uv alone is enough
-        // to make everything work on a bare system.
-        // The official one-liner from https://astral.sh/uv.
-        private const string UvInstallCommand =
-            "-ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"";
+        // A machine with no Python at all still has to work.  Preference order is
+        // uv (fastest, and it brings the compiled blake3), then whatever Python
+        // is installed, then a private copy of python.org's embeddable build
+        // unpacked into tools/python - ~11 MB to download, ~22 MB on disk, no
+        // installer, no PATH changes, and it is deleted along with this fix.
+        private const string PythonEmbedUrl =
+            "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip";
 
-        private bool uvOffered;
+        private static string EmbeddedPythonDir()
+        {
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                                Path.Combine("tools", "python"));
+        }
+
+        private static string EmbeddedPython()
+        {
+            string exe = Path.Combine(EmbeddedPythonDir(), "python.exe");
+            return File.Exists(exe) ? exe : null;
+        }
+
+        /// <summary>Fetch python.org's embeddable build into tools/python.</summary>
+        private string FetchEmbeddedPython()
+        {
+            string dir = EmbeddedPythonDir();
+            string zip = Path.Combine(Path.GetTempPath(), "lisde-python-embed.zip");
+            try
+            {
+                Log("No Python on this machine - fetching a private copy (~11 MB):");
+                Log("  " + PythonEmbedUrl);
+                Application.DoEvents();
+                // the 4.0 default protocol list predates TLS 1.2, which python.org requires
+                ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
+                using (WebClient wc = new WebClient())
+                {
+                    wc.Headers.Add("User-Agent", "LiSUltrawideFix");
+                    wc.DownloadFile(PythonEmbedUrl, zip);
+                }
+                if (Directory.Exists(dir)) Directory.Delete(dir, true);
+                Directory.CreateDirectory(dir);
+                ZipFile.ExtractToDirectory(zip, dir);
+                string exe = EmbeddedPython();
+                Log(exe != null
+                    ? "  Python ready: " + exe
+                    : "  the archive contained no python.exe");
+                return exe;
+            }
+            catch (Exception ex)
+            {
+                Log("  could not fetch Python: " + ex.Message);
+                return null;
+            }
+            finally
+            {
+                try { if (File.Exists(zip)) File.Delete(zip); }
+                catch { }
+            }
+        }
 
         /// <summary>uv from PATH, or from the locations its installer uses.</summary>
         private static string FindUv()
@@ -760,69 +814,7 @@ namespace LiSUltrawidePatcher
             return null;
         }
 
-        /// <summary>Ask, then run uv's official installer. Returns its path or null.</summary>
-        private string OfferToFetchUv(string reason)
-        {
-            DialogResult r = MessageBox.Show(
-                reason + "\r\n\r\n"
-                + "Install uv now? This runs the official one-line installer from "
-                + "astral.sh:\r\n\r\n"
-                + "    powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"\r\n\r\n"
-                + "It installs for your user account only - no administrator rights "
-                + "and no system-wide changes. uv then downloads a Python interpreter "
-                + "by itself if this machine does not have one, so this is all that "
-                + "is needed.",
-                "Install uv?", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (r != DialogResult.Yes) return null;
-
-            try
-            {
-                Log("Running the uv installer...");
-                Application.DoEvents();
-
-                ProcessStartInfo psi = new ProcessStartInfo("powershell", UvInstallCommand);
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-
-                using (Process p = Process.Start(psi))
-                {
-                    p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e)
-                    { if (e.Data != null) Log("  " + e.Data); };
-                    p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e)
-                    { if (e.Data != null) Log("  " + e.Data); };
-                    p.BeginOutputReadLine();
-                    p.BeginErrorReadLine();
-                    p.WaitForExit();
-                }
-
-                string uv = FindUv();
-                if (uv != null)
-                {
-                    Log("uv ready: " + uv);
-                    return uv;
-                }
-                Log("uv was not found after the installer finished.");
-                MessageBox.Show(
-                    "The installer ran but uv could not be found afterwards.\r\n\r\n"
-                    + "Try opening a new terminal and running 'uv --version', or "
-                    + "install Python 3.8+ and put it on PATH.",
-                    "uv not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-            catch (Exception ex)
-            {
-                Log("Install failed: " + ex.Message);
-                MessageBox.Show(
-                    "Could not run the uv installer:\r\n\r\n" + ex.Message + "\r\n\r\n"
-                    + "You can install it manually from https://astral.sh/uv, or "
-                    + "install Python 3.8+ and put it on PATH.",
-                    "Install failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            return null;
-        }
-
-        /// <summary>Resolve how to run Python: uv first, then py, then python.</summary>
+        /// <summary>How to run Python: uv, the system one, then our own copy.</summary>
         private bool ResolveRunner(string script, List<string> argv,
                                    out string exe, out string args)
         {
@@ -846,6 +838,13 @@ namespace LiSUltrawidePatcher
             if (Which("python") != null)
             {
                 exe = "python";
+                args = tail.ToString();
+                return true;
+            }
+            string embedded = EmbeddedPython();
+            if (embedded != null)
+            {
+                exe = embedded;
                 args = tail.ToString();
                 return true;
             }
@@ -893,14 +892,15 @@ namespace LiSUltrawidePatcher
             string exe, args;
             if (!ResolveRunner(script, argv, out exe, out args))
             {
-                if (OfferToFetchUv("Neither uv nor Python was found on this computer.")
-                        == null)
+                txtLog.Clear();
+                if (FetchEmbeddedPython() == null)
                 {
                     MessageBox.Show(
-                        "Nothing to run the patcher with.\r\n\r\n"
-                        + "Install uv (https://astral.sh/uv) - recommended - or "
-                        + "install Python 3.8+ and make sure it is on PATH.",
-                        "Python not found", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        "Nothing to run the patcher with, and the interpreter "
+                        + "download failed.\r\n\r\n"
+                        + "Check the connection and try again, or install Python "
+                        + "3.8+ (python.org) and make sure it is on PATH.",
+                        "No Python", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
                 ResolveRunner(script, argv, out exe, out args);
@@ -990,19 +990,6 @@ namespace LiSUltrawidePatcher
                                 MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            // The full-width UI step needs the blake3 module. Running under uv
-            // supplies it automatically; without uv the user would have to pip
-            // install it, so offer the easy route once.
-            if (chkGameFiles.Checked && !uvOffered && FindUv() == null)
-            {
-                uvOffered = true;
-                OfferToFetchUv(
-                    "The \"Full-width UI\" option needs one extra Python package "
-                    + "(blake3), which uv provides automatically.\r\n\r\n"
-                    + "Without it that single step is skipped - the camera patch and "
-                    + "the display tweaks still apply normally.");
-            }
-
             if (!chkExe.Checked) argv.Add("--no-exe");
             if (!chkGameFiles.Checked) argv.Add("--no-game-files");
             if (!chkChromatic.Checked) argv.Add("--no-chromatic-fix");

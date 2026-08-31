@@ -16,11 +16,13 @@ Both methods run the same code - the GUI is a thin front-end over `patcher.py`, 
 4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
 5. Leave all four options ticked and click **Install**.
 
+**Python is not required.** The patch logic lives in `patcher.py`, so the program needs an interpreter to run it - it uses `uv` or a Python you already have, and on a machine with neither it downloads python.org's embeddable build (~11 MB) into its own `tools/python/` folder. Nothing is installed system-wide, no `PATH` is touched, and deleting the fix deletes it again.
+
 ### Method 2: Command line (Windows / Steam Deck / Linux / Proton / macOS)
 
-#### Install uv, if you do not have it
+#### Optional: install uv
 
-`uv` ([astral.sh/uv](https://astral.sh/uv)) is the easiest way to run the installer: no virtualenv, and it fetches both a Python interpreter and the one optional dependency by itself. It installs for your user account only - no administrator rights and no system-wide changes.
+Any Python 3.6+ runs the installer with no dependencies at all, so this is optional. `uv` ([astral.sh/uv](https://astral.sh/uv)) is still the smoothest route if you would rather not think about interpreters: it supplies its own Python and the compiled `blake3`, needs no virtualenv, and installs for your user account only - no administrator rights, no system-wide changes.
 
 Windows:
 
@@ -37,13 +39,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 #### Run the installer
 
 ```bash
-uv run patcher.py
+python patcher.py
 ```
 
-Plain Python works too, if you already have 3.6+:
+or, under uv:
 
 ```bash
-python patcher.py
+uv run patcher.py
 ```
 
 Run with no arguments for an interactive install, or drive it directly:
@@ -56,7 +58,7 @@ python patcher.py --restore
 
 The game is located automatically ([how](RESEARCH.md#8a-where-the-installer-looks-for-the-game)), so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match.
 
-**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step also needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor, which the installer fetches by itself the first time it needs one - [why, and from where](RESEARCH.md#9e-obtaining-the-oodle-decompressor). Pass `--no-fetch-oodle` to forbid that download. If either is unavailable, that one step is skipped and reported; everything else still installs.
+**Requirements:** Python 3.6+ and nothing else - the standard library covers everything. The full-width UI step hashes with the compiled `blake3` module when it happens to be installed and falls back to a bundled pure-Python BLAKE3 otherwise, and it needs an Oodle decompressor, which the installer fetches by itself the first time - [why, and from where](RESEARCH.md#9e-obtaining-the-oodle-decompressor). `--no-fetch-oodle` forbids that download. If either is unavailable, that one step is skipped and reported; everything else still installs.
 
 ### Checking what you have
 
@@ -121,7 +123,7 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 ## Troubleshooting
 
 - **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
-- **The full-width UI step was skipped:** it needs `blake3` and an Oodle DLL. The Oodle one is downloaded automatically unless you passed `--no-fetch-oodle`, so this usually means `blake3` is missing - `uv run patcher.py` supplies it.
+- **The full-width UI step was skipped:** it needs an Oodle decompressor, which is downloaded automatically unless you passed `--no-fetch-oodle`. If the download failed, drop any `oo2core_*_win64.dll` from another Unreal Engine game into `tools/assetdump/` and re-run.
 - **Everything looks wrong after a game update:** all code sites are located by unique byte signatures and the patcher reports cleanly if the game version is unsupported. Re-run the installer after updates.
 - **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
 - **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.

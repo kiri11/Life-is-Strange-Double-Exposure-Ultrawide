@@ -169,9 +169,9 @@ def main():
         return
 
     try:
-        from blake3 import blake3
+        from blake3 import blake3          # the compiled one, if installed
     except ImportError:
-        raise SystemExit('pip install blake3  (needed for the chunk meta hash)')
+        from blake3_pure import blake3     # stdlib fallback, same digest
 
     so = load_script_objects('global.utoc')
     toc = Toc(utoc)
