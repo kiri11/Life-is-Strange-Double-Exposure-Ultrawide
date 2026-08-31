@@ -441,9 +441,9 @@ The game's data files are 97% Oodle-compressed, and Oodle ships *statically link
 
 1. a copy already in `tools/assetdump/`;
 2. one shipped by **another Unreal Engine game on the machine** - most UE titles carry `oo2core_*_win64.dll`, which exports the same entry point, so nothing is downloaded;
-3. otherwise Epic's Oodle-for-UE build (~7 MB), downloaded on request from [WorkingRobot/OodleUE](https://github.com/WorkingRobot/OodleUE).
+3. otherwise Epic's Oodle-for-UE build (~7 MB), downloaded from [WorkingRobot/OodleUE](https://github.com/WorkingRobot/OodleUE).
 
-Only step 3 touches the network, and only after the user agrees - the GUI asks, and the command line asks unless `--fetch-oodle` is passed (`--yes` declines rather than downloading silently). Declining skips just the full-width UI step.
+Only step 3 touches the network, and only when the full-width UI step is actually going to run and the first two came up empty; the DLL lands in `tools/assetdump/` and is reused from then on. `--no-fetch-oodle` turns the download off, which skips just that one step.
 
 ## 10. Runtime Camera Measurement - The Letterbox Ramp
 

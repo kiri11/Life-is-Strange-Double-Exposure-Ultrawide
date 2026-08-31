@@ -1013,9 +1013,11 @@ def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
 #   1. one already sitting in tools/assetdump/ or next to this script;
 #   2. one shipped by another Unreal Engine game on this machine - most UE
 #      titles carry oo2core_*_win64.dll, and it exports the same entry point;
-#   3. failing that, Epic's Oodle-for-UE source build, downloaded on request.
+#   3. failing that, Epic's Oodle-for-UE source build, downloaded automatically.
 #
-# Only step 3 touches the network, and only after asking.
+# Only step 3 touches the network, and only when the full-width UI step is
+# actually going to run and steps 1-2 came up empty. --no-fetch-oodle turns
+# that download off; the step is then skipped and reported.
 
 OODLE_ZIP_URL = ("https://github.com/WorkingRobot/OodleUE/releases/latest/"
                  "download/msvc-x64-release.zip")
@@ -1111,20 +1113,16 @@ def fetch_oodle():
             pass
 
 
-def ensure_oodle(exe_path, allow_fetch, interactive):
-    """Locate Oodle, optionally downloading it. -> path or None."""
+def ensure_oodle(exe_path, allow_fetch=True):
+    """Locate Oodle, downloading it when there is none. -> path or None."""
     found = find_oodle(exe_path)
     if found:
         return found
     if not allow_fetch:
-        if not interactive:
-            return None
-        print("\n  The full-width UI step needs an Oodle decompressor, which cannot")
-        print("  be bundled with this fix (it is proprietary). It can be downloaded")
-        print("  from Epic's Oodle-for-UE build:")
-        print("      " + OODLE_ZIP_URL)
-        if not ask_yes("  Download it now?", True):
-            return None
+        print("  no Oodle decompressor found, and --no-fetch-oodle was given")
+        return None
+    print("\n  No Oodle decompressor on this machine - fetching Epic's")
+    print("  Oodle-for-UE build (~7 MB, once):")
     return fetch_oodle()
 
 # ---------------------------------------------------------------------------
@@ -1215,8 +1213,7 @@ def choose_resolution(detected):
 
 
 def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, restore=False, fetch_oodle_ok=False,
-                interactive=True):
+                do_sharpen, restore=False, fetch_oodle_ok=True):
     if restore:
         print("\nRestoring everything to stock...")
         patch_exe(exe_path, 16, 9, "stock")
@@ -1239,7 +1236,7 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
     print("\n[2/3] Full-width UI (game files)")
     if do_files:
         good, missing = game_files_requirements()
-        oodle = ensure_oodle(exe_path, fetch_oodle_ok, interactive) if good else None
+        oodle = ensure_oodle(exe_path, fetch_oodle_ok) if good else None
         if good and oodle:
             print("  using Oodle: {}".format(oodle))
             ok = apply_game_files(exe_path, width, height, oodle_dll=oodle) and ok
@@ -1248,7 +1245,7 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
             for m in missing:
                 print("       - " + m)
             if good and not oodle:
-                print("       - an Oodle decompressor (declined or unavailable)")
+                print("       - an Oodle decompressor (none found, none fetched)")
             print("     Everything else was still applied.")
             ok = False
     else:
@@ -1287,9 +1284,11 @@ def main():
                         help="skip the ultrawide camera patch (the executable)")
     parser.add_argument("--no-game-files", action="store_true",
                         help="skip the full-width UI patch (the game data files)")
+    parser.add_argument("--no-fetch-oodle", action="store_true",
+                        help="never download the Oodle decompressor the full-width "
+                             "UI step needs; skip that step instead")
     parser.add_argument("--fetch-oodle", action="store_true",
-                        help="allow downloading the Oodle decompressor without "
-                             "asking (the full-width UI step needs one)")
+                        help=argparse.SUPPRESS)      # accepted; now the default
     parser.add_argument("--no-chromatic-fix", action="store_true",
                         help="skip disabling chromatic aberration")
     parser.add_argument("--no-sharpen", action="store_true",
@@ -1383,8 +1382,7 @@ def main():
         return
 
     run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, fetch_oodle_ok=args.fetch_oodle,
-                interactive=not args.yes)
+                do_sharpen, fetch_oodle_ok=not args.no_fetch_oodle)
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ python patcher.py --restore
 
 The game is located automatically ([how](RESEARCH.md#8a-where-the-installer-looks-for-the-game)), so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match.
 
-**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step also needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor, which the installer obtains for you - [why, and from where](RESEARCH.md#9e-obtaining-the-oodle-decompressor). If either is unavailable, that one step is skipped and reported; everything else still installs.
+**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step also needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor, which the installer fetches by itself the first time it needs one - [why, and from where](RESEARCH.md#9e-obtaining-the-oodle-decompressor). Pass `--no-fetch-oodle` to forbid that download. If either is unavailable, that one step is skipped and reported; everything else still installs.
 
 ### Checking what you have
 
@@ -121,7 +121,7 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 ## Troubleshooting
 
 - **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
-- **The full-width UI step was skipped:** it needs `blake3` and an Oodle DLL (see Installation). Use `uv run patcher.py` to get `blake3` automatically.
+- **The full-width UI step was skipped:** it needs `blake3` and an Oodle DLL. The Oodle one is downloaded automatically unless you passed `--no-fetch-oodle`, so this usually means `blake3` is missing - `uv run patcher.py` supplies it.
 - **Everything looks wrong after a game update:** all code sites are located by unique byte signatures and the patcher reports cleanly if the game version is unsupported. Re-run the installer after updates.
 - **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
 - **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
