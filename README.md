@@ -1,6 +1,100 @@
 # Life is Strange: Double Exposure - Ultrawide & Cutscene Fix
 
-A lightweight, native ultrawide fix for **Life is Strange: Double Exposure** supporting 21:9, 32:9, 32:10, 16:10 and custom resolutions.
+A lightweight, native ultrawide fix for **Life is Strange: Double Exposure** supporting 21:9, 32:9, 32:10, 16:10 and custom resolutions. Any resolution works - the installer detects yours automatically.
+
+---
+
+## Installation
+
+Both methods run the same code - the GUI is a thin front-end over `patcher.py`, so there is only one implementation to keep correct.
+
+### Method 1: Windows GUI
+
+1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/archive/refs/heads/main.zip)** and unpack the zip anywhere.
+2. Run **`LiSUltrawidePatcher.exe`** (keep it next to `patcher.py`).
+3. It finds your game installation and your display automatically - it does not matter where you unpacked the fix (see [Finding the game](#finding-the-game)).
+4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
+5. Leave all four options ticked and click **Install**.
+
+### Method 2: Command line (Windows / Steam Deck / Linux / Proton / macOS)
+
+#### Install uv, if you do not have it
+
+`uv` ([astral.sh/uv](https://astral.sh/uv)) is the easiest way to run the installer: no virtualenv, and it fetches both a Python interpreter and the one optional dependency by itself. It installs for your user account only - no administrator rights and no system-wide changes.
+
+Windows:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+macOS, Linux and Steam Deck:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+#### Run the installer
+
+```bash
+uv run patcher.py
+```
+
+Plain Python works too, if you already have 3.6+:
+
+```bash
+python patcher.py
+```
+
+Run with no arguments for an interactive install, or drive it directly:
+
+```bash
+python patcher.py --yes
+python patcher.py --width 5120 --height 2160 --yes
+python patcher.py --restore
+```
+
+The game is located automatically, so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match.
+
+**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step also needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor, which the installer obtains for you - [why, and from where](RESEARCH.md#9e-obtaining-the-oodle-decompressor). If either is unavailable, that one step is skipped and reported; everything else still installs.
+
+### Finding the game
+
+Neither entry point cares where it is run from. Both look, in this order:
+
+1. next to the installer itself, and next to the current folder (`Chronos/Binaries/Win64/`, up to two levels up);
+2. **every Steam library on the machine** - the Steam installations named in the registry and the usual `Program Files` locations, then each library folder listed in their `libraryfolders.vdf`, with the game's folder name read from `appmanifest_1874000.acf`;
+3. the **Epic Games Launcher** manifests in `%PROGRAMDATA%\Epic\EpicGamesLauncher\Data\Manifests`;
+4. the usual game roots on every fixed drive (`Games`, `Program Files`, `Program Files (x86)`, `GOG Games`, `Epic Games`, `SteamLibrary\steamapps\common`), including any folder whose name looks like the game's.
+
+Nothing is ever scanned recursively, so this costs a few milliseconds. On Linux, the Steam Deck and macOS the same search covers `~/.steam`, `~/.local/share/Steam` and the Flatpak Steam data folder, which is where Proton installs live. The tool reports which of the four found it, and you can always override the result - **Browse** in the GUI, `--exe` on the command line.
+
+### Checking what you have
+
+Before anything is written, the installer classifies the executable using the same byte signatures it patches through - each patch site is recognisable in both its stock and its patched form:
+
+| Verdict | Meaning |
+| :--- | :--- |
+| **Original** | Stock, and a build these signatures match - safe to install. |
+| **Already patched** | The fix is in. Installing again is still safe: every run restarts from the `.exe.original` backup, so nothing stacks. The read-out names the parts it found, including the gate bound the exe was patched for. |
+| **Unrecognised** | The signature sites are not there - a game update, or not the game's executable. |
+
+The GUI shows this as a coloured line under the path (green tick / orange warning, full detail on hover) and refreshes it after every install or restore; on the command line it is one `Executable:` line, or `--check-exe` on its own. Because the check reads the same signature table the patcher writes with, the badge cannot disagree with what **Install** would do.
+
+### What each option does
+
+| Option | Effect | Touches |
+| :--- | :--- | :--- |
+| **Ultrawide camera** | Hor+ cutscenes, dialogue and exploration; no bars, no zoom on hand-off | `Chronos-Win64-Shipping.exe` |
+| **Full-width UI** | Loading screens cover the screen; HUD on the real edge | `pakchunk0-Windows.utoc` / `.ucas` |
+| **Disable chromatic aberration** | Removes colour fringing, most visible at the widened edges | `Engine.ini` |
+| **Reduce blurriness** | Recommended TSR settings for your resolution | `Engine.ini` |
+
+All four are enabled by default and each can be turned off (`--no-exe`, `--no-game-files`, `--no-chromatic-fix`, `--no-sharpen`).
+
+Every part creates a backup before writing: `.exe.original`, `.utoc.original`, and a clearly marked, individually removable block in `Engine.ini`. Re-running never stacks changes - each run starts from the pristine state.
+
+> Do not run Steam's **Verify Integrity of Game Files** while the full-width UI patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update also overwrites it; just re-run the installer afterwards.
 
 ---
 
@@ -27,112 +121,11 @@ See [RESEARCH.md](RESEARCH.md) for the complete technical breakdown, including t
 
 ---
 
-## Supported Resolutions
-
-Any resolution is supported; the installer detects yours automatically. Presets:
-
-| Resolution | Aspect Ratio |
-| :--- | :--- |
-| **5120x2160** (WUHD 4K) | 21.33:9 |
-| **3440x1440** (UWQHD) | 21.5:9 |
-| **2560x1080** (UWD) | 21.33:9 |
-| **3840x1600** (UW) | 24:10 |
-| **5120x1440** / **3840x1080** / **7680x2160** | 32:9 |
-| **3840x1200** (32:10) | 32:10 |
-| **2560x1600** (16:10) | 16:10 |
-| **Custom** | *Any width x height* |
-
----
-
-## Installation
-
-Both methods run the same code - the GUI is a thin front-end over `patcher.py`, so there is only one implementation to keep correct.
-
-### Method 1: Windows GUI
-
-1. Run **`LiSUltrawidePatcher.exe`** (keep it next to `patcher.py`).
-2. It detects your game and display automatically.
-3. Leave all four options ticked and click **Install**.
-
-**You do not need Python installed.** The GUI looks for `uv`, then `py`, then `python`. If none is present - or if the full-width UI option is ticked and `uv` is missing, since that step needs the `blake3` package - it offers to run uv's official installer for you:
-
-```
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-It always asks first and shows the exact command. The installer is per-user, needs no administrator rights, and `uv` then fetches a Python interpreter and `blake3` by itself - so accepting once makes everything work on a machine with no Python at all. Declining just falls back to whatever Python you already have.
-
-### Method 2: Command line (Windows / Steam Deck / Linux / Proton / macOS)
-
-```bash
-uv run patcher.py
-```
-
-`uv` ([astral.sh/uv](https://astral.sh/uv)) is the easiest option: no virtualenv, and it fetches the one optional dependency automatically. Plain Python works too:
-
-```bash
-python patcher.py
-```
-
-Run with no arguments for an interactive install, or drive it directly:
-
-```bash
-python patcher.py --yes
-python patcher.py --width 5120 --height 2160 --yes
-python patcher.py --restore
-```
-
-**Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step also needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor, which the installer obtains for you - see below. If either is unavailable, that one step is skipped and reported; everything else still installs.
-
-### About the Oodle decompressor
-
-The game's data files are 97% Oodle-compressed, and Oodle ships *statically linked* inside the game executable, so reading a package needs a standalone decompressor. It cannot be bundled here - it is proprietary, and redistributing it is governed by the Unreal Engine EULA.
-
-The installer resolves this itself, in order:
-
-1. a copy already in `tools/assetdump/`;
-2. one shipped by **another Unreal Engine game on your PC** - most UE titles carry `oo2core_*_win64.dll`, which exports the same entry point, so nothing is downloaded;
-3. otherwise Epic's Oodle-for-UE build (~7 MB), downloaded on request from [WorkingRobot/OodleUE](https://github.com/WorkingRobot/OodleUE).
-
-Only step 3 touches the network, and only after you agree - the GUI asks, and the command line asks unless you pass `--fetch-oodle` (or `--yes`, which declines rather than downloading silently). Decline and just that one step is skipped.
-
-### What each option does
-
-| Option | Effect | Touches |
-| :--- | :--- | :--- |
-| **Ultrawide camera** | Hor+ cutscenes, dialogue and exploration; no bars, no zoom on hand-off | `Chronos-Win64-Shipping.exe` |
-| **Full-width UI** | Loading screens cover the screen; HUD on the real edge | `pakchunk0-Windows.utoc` / `.ucas` |
-| **Disable chromatic aberration** | Removes colour fringing, most visible at the widened edges | `Engine.ini` |
-| **Reduce blurriness** | Recommended TSR settings for your resolution | `Engine.ini` |
-
-All four are enabled by default and each can be turned off (`--no-exe`, `--no-game-files`, `--no-chromatic-fix`, `--no-sharpen`).
-
-Every part creates a backup before writing: `.exe.original`, `.utoc.original`, and a clearly marked, individually removable block in `Engine.ini`. Re-running never stacks changes - each run starts from the pristine state.
-
-> Do not run Steam's **Verify Integrity of Game Files** while the full-width UI patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update also overwrites it; just re-run the installer afterwards.
-
----
-
 ## Display Tweaks in Detail
 
 The last two options write one managed block into `%localappdata%\Chronos\Saved\Config\Windows\Engine.ini`. Your existing settings are left untouched, and `--restore` removes the block byte-for-byte.
 
 TSR - UE5's temporal upscaler - is what makes this game look soft. The two settings that matter most are rendering at 100% of the output resolution instead of upscaling from a lower one, and giving TSR a history buffer above output resolution to resolve detail from. The history multiplier is the expensive one, so it is scaled back at very high pixel counts (200 below ~8 MP, 150 above). These are a sane starting point rather than gospel - every line is an ordinary UE console variable, commented in the file, and safe to edit afterwards.
-
-Optional extra, not written by the installer - faster streaming reduces texture pop-in at the screen sides during loading transitions:
-
-```ini
-[SystemSettings]
-r.Streaming.PoolSize=4096
-r.Streaming.FramesForFullUpdate=1
-```
-
----
-
-## Possible Improvements
-
-- **Player-menu tabs:** three full-stretch tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are not repositioned by the UI patch. Giving them the centred box their three siblings already have needs a *structural* package edit (adding serialized properties changes the package size), which the in-place float patcher deliberately does not support.
-- **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside cave A's gate window; the gate can be extended per report.
 
 ---
 
@@ -141,13 +134,14 @@ r.Streaming.FramesForFullUpdate=1
 - **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
 - **The full-width UI step was skipped:** it needs `blake3` and an Oodle DLL (see Installation). Use `uv run patcher.py` to get `blake3` automatically.
 - **Everything looks wrong after a game update:** all code sites are located by unique byte signatures and the patcher reports cleanly if the game version is unsupported. Re-run the installer after updates.
+- **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
 - **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
 
 ---
 
 ## Technical Documentation & Research
 
-For the reverse-engineering breakdown, Unreal Engine 5 projection-matrix analysis, disassembly of the patched sites, the asset-container tooling, the runtime camera measurements, and the dead ends explored, see **[RESEARCH.md](RESEARCH.md)**. Historical iterations of this fix are preserved in git history.
+For the reverse-engineering breakdown, Unreal Engine 5 projection-matrix analysis, disassembly of the patched sites, the asset-container tooling, the runtime camera measurements, the open work still on the table, and the dead ends explored, see **[RESEARCH.md](RESEARCH.md)**. Historical iterations of this fix are preserved in git history.
 
 ---
 

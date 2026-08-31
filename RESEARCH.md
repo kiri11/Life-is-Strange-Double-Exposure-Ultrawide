@@ -249,7 +249,7 @@ During loading transitions, narrow strips of the still-streaming world can appea
 
 1. **`patcher.py`** - the installer and the single source of truth for everything this fix writes. Four independent parts, all on by default: the executable camera patch, the full-width UI container patch (delegated to `tools/assetdump/`), and two `Engine.ini` tweaks (chromatic aberration off, anti-blur TSR settings) written as one removable managed block. `--restore` undoes all of it byte-for-byte. Carries PEP 723 inline metadata, so `uv run patcher.py` needs no virtualenv and fetches `blake3` itself. Signature-scan fallback for game updates; always patches from the pristine `.original` backup, so re-runs never stack.
    Advanced: `--mode` patches only the executable, in one of `cine` (shipped behaviour), `horplus`, `hybrid`, `clean`, `full`, `stock`.
-2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`). A **thin front-end only**: it detects the game and display, shows the four options as checkboxes, and shells out to `patcher.py` (preferring `uv run`, then `py`, then `python`), streaming its output. It contains no patch logic. An earlier version reimplemented the byte patches in C# and silently drifted out of sync - keeping one implementation is deliberate.
+2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`). A **thin front-end only**: it finds the game (its own folder, then Steam libraries, Epic manifests and the usual game roots - the same order `find_exe()` uses), detects the display, shows the four options as checkboxes, and shells out to `patcher.py` (preferring `uv run`, then `py`, then `python`), streaming its output. The stock / already patched / unrecognised badge under the path is `patcher.py --check-exe` run in the background, so the verdict comes from the same signature table the patcher writes with. It contains no patch logic. An earlier version reimplemented the byte patches in C# and silently drifted out of sync - keeping one implementation is deliberate.
 3. **`tools/assetdump/`** - the IoStore/Zen container reader and the UI layout patcher (section 9).
 4. **`tools/make_icon.py`** - regenerates `LiSUltrawidePatcher.ico` (7 sizes, 16-256 px) with no imaging dependencies: shapes are supersampled by hand and written as PNG-compressed ICO entries via `zlib` and `struct`.
 
@@ -422,6 +422,18 @@ The main-menu and title screens are full-bleed compositions with no 3840 box to 
 
 Native window classes recovered from the exe's UTF-16 string table: `UUIWindow`, `UOverlayUIWindow`, `UModalUIWindow`, `UUIObjectWindow`, `UUIWindowLogic`, `UIWindowProps`, `UD9UIWindowManager`, `UChronosUIWindowManager`, `UChronosUISceneTextureSubsystem`, plus one `UChronos*Window` / `U*Window` pair per screen (`UChronosLoadingWindow`, `UChronosNotificationWindow`, `UChronosMainMenuWindow`, `UChronosPauseWindow`, ...). `UScaleBox`, `USafeZone` and their slots are linked in but unused by the windows inspected so far.
 
+### 9e. Obtaining the Oodle Decompressor
+
+The game's data files are 97% Oodle-compressed, and Oodle ships *statically linked* inside the game executable, so reading a package needs a standalone decompressor. It cannot be bundled with this fix - it is proprietary, and redistributing it is governed by the Unreal Engine EULA.
+
+`patcher.py` resolves this itself, in order:
+
+1. a copy already in `tools/assetdump/`;
+2. one shipped by **another Unreal Engine game on the machine** - most UE titles carry `oo2core_*_win64.dll`, which exports the same entry point, so nothing is downloaded;
+3. otherwise Epic's Oodle-for-UE build (~7 MB), downloaded on request from [WorkingRobot/OodleUE](https://github.com/WorkingRobot/OodleUE).
+
+Only step 3 touches the network, and only after the user agrees - the GUI asks, and the command line asks unless `--fetch-oodle` is passed (`--yes` declines rather than downloading silently). Declining skips just the full-width UI step.
+
 ## 10. Runtime Camera Measurement - The Letterbox Ramp
 
 Sections 2-9 were derived statically. The dialogue-exit zoom resisted that approach through three wrong hypotheses, so it was settled by measurement instead: a read-only UE4SS Lua mod sampling `APlayerCameraManager` every frame and logging `ViewTarget.Target`, `ViewTarget.POV.{FOV, AspectRatio, bConstrainAspectRatio, Location}` and `CameraCachePrivate.POV` (the finished, post-blend view that reaches the renderer). It hooked nothing and wrote nothing back. **Debug only - it is not part of the shipped fix.**
@@ -481,3 +493,9 @@ Recorded because each looked convincing and each was wrong - the sequence is a f
 Only the fourth attempt - measuring instead of inferring - produced the answer, and it took a single capture to do it.
 
 ---
+
+## 11. Possible Improvements
+
+- **Player-menu tabs:** three full-stretch tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are not repositioned by the UI patch (section 9c). Giving them the centred box their three siblings already have needs a *structural* package edit - adding serialized properties changes the package size - which the in-place float patcher deliberately does not support.
+- **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside cave A's gate window (section 2c); the gate can be extended per report.
+

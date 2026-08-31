@@ -29,6 +29,7 @@ Compatible with Python 3.6+ (3.8+ under uv).
 
 import argparse
 import io
+import json
 import os
 import re
 import shutil
@@ -357,20 +358,382 @@ def locate(data, spec):
             spec["name"], len(hits)))
 
 # ---------------------------------------------------------------------------
-# Patching
+# Checking an executable
+# ---------------------------------------------------------------------------
+# The same signatures the patcher writes through also identify what a given
+# executable currently is, which is all the front-ends need to show a status:
+# every patched site is recognisable in both its stock and its patched form.
+
+# PATCH_AXIS applied: both "cmp dl,<enum>" immediates rewritten to 0xFF
+AXIS_PATCHED_SIG = ("3B C1 7E 09 80 FA FF 0F 84 ?? ?? ?? ?? "
+                    "80 FA FF 0F 84 ?? ?? ?? ??")
+# cave A applied: the flag-copy preamble replaced by "call caveA ; nop2"
+GATE_CAVE_SIG = "E8 ?? ?? ?? ?? 66 90 33 47 4C 83 E0 01"
+# legacy horplus/clean modes: the same preamble replaced by "xor eax,eax ; nop5"
+GATE_HORPLUS_SIG = "31 C0 0F 1F 44 00 00 33 47 4C 83 E0 01"
+
+# offsets inside the cave A blob built by build_cave_a()
+CAVE_A_UPPER_AT = 23
+CAVE_A_PIN_AT = 35
+
+STOCK_AUTHORED_ASPECT = 16.0 / 9.0
+
+
+def _matches_at(data, sig, offset):
+    pat, mask = parse_sig(sig)
+    window = data[offset:offset + len(pat)]
+    return len(window) == len(pat) and all(
+        (not mask[j]) or window[j] == pat[j] for j in range(len(pat)))
+
+
+def _find_sig(data, sig, expected=None):
+    """Offset of the first match, expected offset first; None if absent."""
+    if expected is not None and _matches_at(data, sig, expected):
+        return expected
+    pat, mask = parse_sig(sig)
+    hits = masked_find_all(data, pat, mask, limit=1)
+    return hits[0] if hits else None
+
+
+def _float_at(data, offset):
+    try:
+        return struct.unpack_from("<f", data, offset)[0]
+    except struct.error:
+        return None
+
+
+def _cave_a_gate(data, call_site):
+    """Gate bound and pinned aspect of an installed cave A, or (None, None)."""
+    rel = struct.unpack_from("<i", data, call_site + 1)[0]
+    cave = call_site + 5 + rel
+    if cave < 0 or cave + 40 > len(data):
+        return None, None
+    return (_float_at(data, cave + CAVE_A_UPPER_AT),
+            _float_at(data, cave + CAVE_A_PIN_AT))
+
+
+def _site_state(data, expected, variants):
+    """{label: offset} for the one variant a patch site is currently in.
+
+    Every variant is tried at the site's known offset before anything is
+    scanned for, so the common cases cost nothing.
+    """
+    for label, sig in variants:
+        if _matches_at(data, sig, expected):
+            return {label: expected}
+    for label, sig in variants:
+        hit = _find_sig(data, sig)
+        if hit is not None:
+            return {label: hit}
+    return {}
+
+
+def check_exe(exe_path):
+    """Classify an executable as (status, detail).
+
+    status is one of:
+      "original" - stock, and a build whose code this patcher recognises
+      "patched"  - this fix is installed
+      "unknown"  - the signatures are not there: a game update, or not the
+                   game's executable at all
+      "missing"  - nothing readable at that path
+    """
+    if not exe_path or not os.path.isfile(exe_path):
+        return "missing", "there is no file at that path"
+    try:
+        with open(exe_path, "rb") as f:
+            data = f.read()
+    except (IOError, OSError) as exc:
+        return "missing", "cannot read the file ({})".format(exc)
+    if data[:2] != b"MZ":
+        return "unknown", "not a Windows executable"
+
+    axis = _site_state(data, PATCH_AXIS["expected"],
+                       (("stock", PATCH_AXIS["sig"]),
+                        ("patched", AXIS_PATCHED_SIG)))
+    gate = _site_state(data, GATE_SITE["expected"],
+                       (("stock", GATE_SITE["sig"]),
+                        ("cave", GATE_CAVE_SIG),
+                        ("horplus", GATE_HORPLUS_SIG)))
+    axis_stock, axis_done = axis.get("stock"), axis.get("patched")
+    gate_stock = gate.get("stock")
+    gate_cave, gate_horplus = gate.get("cave"), gate.get("horplus")
+
+    # legacy clean/full modes only rewrote aspect-ratio constants
+    authored = _float_at(data, 0x23E665C)
+    constants_touched = (authored is not None
+                         and abs(authored - STOCK_AUTHORED_ASPECT) > 1e-6)
+
+    if not (axis_stock or axis_done) or not (gate_stock or gate_cave or gate_horplus):
+        return "unknown", ("the code this patcher works on is not in this file - "
+                           "a game update, or not the game's executable")
+
+    backup = " (an .original backup is present)" if \
+        os.path.exists(exe_path + ".original") else ""
+
+    parts = []
+    if axis_done:
+        parts.append("forced Hor+ projection branch")
+    if gate_cave:
+        upper, pin = _cave_a_gate(data, gate_cave)
+        if upper:
+            # the installer sets the bound to max(aspect, 1.8) * 1.002
+            parts.append("aspect gate up to {:.4f} (~{:.2f}:1)".format(
+                upper, upper / 1.002))
+        else:
+            parts.append("aspect gate cave")
+        if pin and abs(pin - STOCK_AUTHORED_ASPECT) > 1e-6:
+            parts.append("FOV divisor pinned to {:.4f}".format(pin))
+    if gate_horplus:
+        parts.append("cameras unconstrained (legacy Hor+ mode)")
+    if constants_touched:
+        parts.append("aspect constants rewritten to {:.4f} (legacy mode)".format(
+            authored))
+    if parts:
+        return "patched", "already patched: " + ", ".join(parts) + backup
+
+    return "original", "stock executable, and a build this patcher knows" + backup
+
+
+# ---------------------------------------------------------------------------
+# Locating the game
 # ---------------------------------------------------------------------------
 
 def find_exe():
-    possible_paths = [
-        "Chronos-Win64-Shipping.exe",
-        os.path.join("Chronos", "Binaries", "Win64", "Chronos-Win64-Shipping.exe"),
-        os.path.join("..", "Chronos", "Binaries", "Win64", "Chronos-Win64-Shipping.exe"),
-    ]
-    for p in possible_paths:
-        if os.path.isfile(p):
-            return os.path.abspath(p)
+    """First hit of a layered search; None if the game is nowhere to be found."""
+    for path, source in _exe_candidates():
+        print("Found game via {}".format(source))
+        return path
     return None
 
+
+STEAM_APPID = "1874000"
+GAME_DIR_NAME = "LifeIsStrangeDoubleExposure"
+EXE_NAME = "Chronos-Win64-Shipping.exe"
+EXE_RELATIVE = os.path.join("Chronos", "Binaries", "Win64", EXE_NAME)
+
+
+def _exe_candidates():
+    """Yield (exe_path, how_it_was_found), most trustworthy first.
+
+    The installer has to work no matter where it is run from, so after the
+    obvious places next to it we ask Steam and Epic where the game lives, and
+    only then fall back to looking around the usual game folders.
+    """
+    seen = set()
+    for finder in (_local_candidates, _steam_candidates, _epic_candidates,
+                   _generic_candidates):
+        try:
+            for path, source in finder():
+                key = os.path.normcase(path)
+                if key not in seen:
+                    seen.add(key)
+                    yield path, source
+        except Exception:        # a broken launcher install must not be fatal
+            continue
+
+
+def _exe_under(game_root):
+    """<game_root>/Chronos/Binaries/Win64/<exe>, if that file exists."""
+    if not game_root:
+        return None
+    path = os.path.join(game_root, EXE_RELATIVE)
+    return os.path.abspath(path) if os.path.isfile(path) else None
+
+
+def _child(parent, name):
+    """parent/name, matched case-insensitively (Linux has SteamApps/steamapps)."""
+    direct = os.path.join(parent, name)
+    if os.path.exists(direct):
+        return direct
+    try:
+        entries = os.listdir(parent)
+    except OSError:
+        return direct
+    for entry in entries:
+        if entry.lower() == name.lower():
+            return os.path.join(parent, entry)
+    return direct
+
+
+def _looks_like_game(name):
+    return "doubleexposure" in re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _local_candidates():
+    """Next to the installer, next to the shell's cwd, or one level up."""
+    relatives = [EXE_NAME, EXE_RELATIVE,
+                 os.path.join("..", EXE_RELATIVE),
+                 os.path.join("..", "..", EXE_RELATIVE)]
+    bases = ((os.path.dirname(os.path.abspath(__file__)), "the installer's own folder"),
+             (os.getcwd(), "the current folder"))
+    for base, label in bases:
+        for rel in relatives:
+            path = os.path.join(base, rel)
+            if os.path.isfile(path):
+                yield os.path.abspath(path), label
+
+
+def _fixed_drives():
+    if os.name != "nt":
+        return ["/"]
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        mask = k32.GetLogicalDrives()
+        drives = []
+        for i in range(26):
+            if not mask & (1 << i):
+                continue
+            root = "{}:\\".format(chr(ord("A") + i))
+            if k32.GetDriveTypeW(root) == 3:          # DRIVE_FIXED
+                drives.append(root)
+        return drives
+    except Exception:
+        return [d for d in ("C:\\", "D:\\", "E:\\", "F:\\") if os.path.isdir(d)]
+
+
+def _steam_installs():
+    """Every Steam installation this machine knows about."""
+    roots, seen = [], set()
+
+    def add(path):
+        if path and os.path.isdir(path) and os.path.normcase(path) not in seen:
+            seen.add(os.path.normcase(path))
+            roots.append(path)
+
+    if os.name == "nt":
+        try:
+            import winreg
+        except ImportError:
+            winreg = None
+        if winreg:
+            keys = ((winreg.HKEY_CURRENT_USER, "Software\\Valve\\Steam"),
+                    (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Valve\\Steam"),
+                    (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\Valve\\Steam"))
+            for hive, key in keys:
+                try:
+                    handle = winreg.OpenKey(hive, key)
+                except OSError:
+                    continue
+                for value in ("SteamPath", "InstallPath"):
+                    try:
+                        add(winreg.QueryValueEx(handle, value)[0])
+                    except OSError:
+                        pass
+                handle.Close()
+    home = os.path.expanduser("~")
+    for path in (os.path.join(home, ".steam", "steam"),
+                 os.path.join(home, ".steam", "root"),
+                 os.path.join(home, ".local", "share", "Steam"),
+                 os.path.join(home, ".var", "app", "com.valvesoftware.Steam",
+                              "data", "Steam"),
+                 os.path.join(home, "Library", "Application Support", "Steam")):
+        add(path)
+    for drive in _fixed_drives():
+        for rel in (os.path.join("Program Files (x86)", "Steam"),
+                    os.path.join("Program Files", "Steam"), "Steam"):
+            add(os.path.join(drive, rel))
+    return roots
+
+
+def _steam_libraries():
+    """Steam installations plus every library folder they have registered."""
+    libraries = _steam_installs()
+    seen = set(os.path.normcase(p) for p in libraries)
+    for install in list(libraries):
+        vdf = os.path.join(_child(install, "steamapps"), "libraryfolders.vdf")
+        try:
+            with io.open(vdf, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except (IOError, OSError):
+            continue
+        # current format keys each entry "path"; the pre-2021 one used numbers
+        found = re.findall('"path"\\s*"([^"]+)"', text)
+        found += re.findall('"[0-9]+"\\s*"([^"]{3,})"', text)
+        for raw in found:
+            path = raw.replace("\\\\", "\\")
+            if os.path.isdir(path) and os.path.normcase(path) not in seen:
+                seen.add(os.path.normcase(path))
+                libraries.append(path)
+    return libraries
+
+
+def _steam_candidates():
+    for library in _steam_libraries():
+        apps = _child(library, "steamapps")
+        common = _child(apps, "common")
+        if not os.path.isdir(common):
+            continue
+        names = []
+        manifest = os.path.join(apps, "appmanifest_{}.acf".format(STEAM_APPID))
+        try:
+            with io.open(manifest, "r", encoding="utf-8", errors="replace") as f:
+                match = re.search('"installdir"\\s*"([^"]+)"', f.read())
+            if match:
+                names.append(match.group(1))
+        except (IOError, OSError):
+            pass
+        names.append(GAME_DIR_NAME)
+        try:
+            names += [d for d in os.listdir(common) if _looks_like_game(d)]
+        except OSError:
+            pass
+        for name in names:
+            exe = _exe_under(os.path.join(common, name))
+            if exe:
+                yield exe, "Steam library {}".format(library)
+
+
+def _epic_candidates():
+    manifests = os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"),
+                             "Epic", "EpicGamesLauncher", "Data", "Manifests")
+    try:
+        entries = os.listdir(manifests)
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.lower().endswith(".item"):
+            continue
+        try:
+            with io.open(os.path.join(manifests, entry), "r",
+                         encoding="utf-8", errors="replace") as f:
+                info = json.load(f)
+        except (IOError, OSError, ValueError):
+            continue
+        exe = _exe_under(info.get("InstallLocation"))
+        if exe:
+            yield exe, "the Epic Games Launcher"
+
+
+def _generic_candidates():
+    """The usual places a game folder ends up when no launcher claims it."""
+    for drive in _fixed_drives():
+        roots = [drive]
+        for rel in ("Games", "Program Files", "Program Files (x86)",
+                    "GOG Games", "Epic Games",
+                    os.path.join("SteamLibrary", "steamapps", "common"),
+                    os.path.join("Games", "steamapps", "common")):
+            roots.append(os.path.join(drive, rel))
+        for root in roots:
+            exe = _exe_under(os.path.join(root, GAME_DIR_NAME))
+            if exe:
+                yield exe, root
+            try:
+                entries = os.listdir(root)
+            except OSError:
+                continue
+            for entry in entries:
+                if not _looks_like_game(entry):
+                    continue
+                exe = _exe_under(os.path.join(root, entry))
+                if exe:
+                    yield exe, root
+
+
+# ---------------------------------------------------------------------------
+# Patching
+# ---------------------------------------------------------------------------
 
 def apply_edits(data, spec):
     base = locate(data, spec)
@@ -907,7 +1270,13 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
 def main():
     parser = argparse.ArgumentParser(
         description="Life is Strange: Double Exposure - ultrawide installer")
-    parser.add_argument("--exe", help="path to Chronos-Win64-Shipping.exe")
+    parser.add_argument("--exe", help="path to Chronos-Win64-Shipping.exe "
+                                      "(found automatically when omitted)")
+    parser.add_argument("--find-exe", action="store_true",
+                        help="only report where the game was found, then exit")
+    parser.add_argument("--check-exe", action="store_true",
+                        help="only report whether the executable is stock, "
+                             "already patched or unrecognised, then exit")
     parser.add_argument("--width", type=int, help="display width, e.g. 5120")
     parser.add_argument("--height", type=int, help="display height, e.g. 2160")
     parser.add_argument("--restore", action="store_true",
@@ -938,11 +1307,25 @@ def main():
 
     exe_path = args.exe or find_exe()
     if not exe_path:
+        print("Could not find the game automatically (searched next to this "
+              "script, every Steam library, the Epic Games Launcher and the "
+              "usual game folders).")
+        if args.find_exe:
+            sys.exit(1)
         exe_path = input("Enter path to Chronos-Win64-Shipping.exe: ").strip(" \"'")
     if not os.path.isfile(exe_path):
         print("Error: could not find file at '{}'".format(exe_path))
         sys.exit(1)
     print("Game executable: {}".format(exe_path))
+    if args.find_exe:
+        return
+
+    status, detail = check_exe(exe_path)
+    if args.check_exe:                       # machine-readable, for the GUI
+        print("status: {}".format(status))
+        print("detail: {}".format(detail))
+        return
+    print("Executable: {}".format(detail))
 
     # advanced escape hatch: executable only, explicit mode
     if args.mode:
