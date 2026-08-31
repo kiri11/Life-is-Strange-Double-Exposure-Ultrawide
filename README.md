@@ -16,9 +16,15 @@ Both methods run the same code - the GUI is a thin front-end over `patcher.py`, 
 4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
 5. Leave all four options ticked and click **Install**.
 
+**Windows will warn you the first time.** The program is not code-signed - a signing certificate is a paid, identity-verified subscription, and this is a free fix - so SmartScreen shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**. Some antivirus tools flag it as well, for the same reason and because of what it does: it rewrites bytes in a game executable and downloads a decompressor, which is what heuristics are built to notice.
+
+None of that is something you have to take on trust. The exe in each release is compiled by GitHub Actions from `LiSUltrawidePatcher.cs` in this repository - the release notes name the commit it was built from and link the build that produced it - and it contains no patch logic of its own: it runs `patcher.py`, which is plain, readable Python sitting next to it. You can also skip the exe entirely and use [Method 2](#method-2-command-line), which does exactly the same work, or compile the exe yourself with the single command in the source file's header.
+
 **Python is not required.** The patch logic lives in `patcher.py`, so the program needs an interpreter to run it - it uses `uv` or a Python you already have, and on a machine with neither it downloads python.org's embeddable build (~11 MB) into its own `tools/python/` folder - or into `%LOCALAPPDATA%\LiSUltrawideFix` if the fix was unpacked somewhere read-only. Nothing is installed system-wide, no `PATH` is touched, and deleting the fix deletes it again.
 
-### Method 2: Command line (Windows / Steam Deck / Linux / Proton / macOS)
+### Method 2: Command line
+
+> **Tested on Windows only.** The installer is written to work on SteamOS and the Steam Deck, on Linux under Proton, and on macOS: the game search knows those install layouts, and `Engine.ini` is looked up inside a Proton prefix. None of that has been run on real hardware, though, and one gap is known - the full-width UI step needs a Linux build of the Oodle decompressor, while the automatic download fetches the Windows one, so on a native Linux run that step will skip itself and the other three will still install. If you are on one of those systems and something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) - or send a pull request, it is a small installer and the platform-specific parts are all in `patcher.py`.
 
 #### Optional: install uv
 
@@ -85,7 +91,9 @@ All four are enabled by default and each can be turned off (`--no-exe`, `--no-ga
 
 Every part creates a backup before writing: `.exe.original`, `.utoc.original`, and a clearly marked, individually removable block in `Engine.ini`. Re-running never stacks changes - each run starts from the pristine state.
 
-> Do not run Steam's **Verify Integrity of Game Files** while the full-width UI patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update also overwrites it; just re-run the installer afterwards.
+A backup belongs to the version of the game it was taken from, and the installer checks that before it trusts one. When a game update replaces the files underneath it, the old backup is set aside (renamed `.old`, never deleted) and a fresh one taken from the updated game - so re-running after an update installs onto the new version instead of writing the previous one back over it. If a backup is missing and the game is already patched, the installer stops and says so rather than guessing.
+
+> Do not run Steam's **Verify Integrity of Game Files** while the full-width UI patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update also overwrites it; just re-run the installer afterwards, which is safe: it notices the game changed and re-takes its backups.
 
 ---
 
@@ -124,7 +132,8 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 
 - **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
 - **The full-width UI step was skipped:** it needs an Oodle decompressor, which is downloaded automatically unless you passed `--no-fetch-oodle`. If the download failed, drop any `oo2core_*_win64.dll` from another Unreal Engine game into `tools/assetdump/` and re-run.
-- **Everything looks wrong after a game update:** all code sites are located by unique byte signatures and the patcher reports cleanly if the game version is unsupported. Re-run the installer after updates.
+- **Everything looks wrong after a game update:** re-run the installer. It re-takes its backups from the updated game, and all code sites are located by unique byte signatures, so it either patches the new build or tells you in one line that this build needs a new version of the fix.
+- **Windows or your antivirus blocked the installer:** the program is unsigned, so SmartScreen needs **More info -> Run anyway**. If an antivirus quarantined it, restore the file and exclude the folder, or leave the exe alone and run `python patcher.py` instead ([Method 2](#method-2-command-line)) - the two are the same installer.
 - **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
 - **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
 

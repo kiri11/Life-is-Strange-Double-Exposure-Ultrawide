@@ -24,6 +24,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # One version number for the whole fix, written here rather than kept in
+      # step by hand: the date and this run's number, which is also the release
+      # tag. Stamping it into both files before the compile means the exe, the
+      # installer and the tag can never disagree about which build they are.
+      - name: Stamp the version
+        shell: pwsh
+        run: |
+          $version = '{0}.{1}' -f (Get-Date -Format 'yyyy.MM.dd'), $env:GITHUB_RUN_NUMBER
+          # AssemblyVersion takes bare numbers - no zero padding, no leading zeros
+          $numeric = ($version -split '\.' | ForEach-Object { [int]$_ }) -join '.'
+          Write-Host "version $version (assembly $numeric)"
+          "VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+
+          $py = Get-Content patcher.py -Raw
+          $py = $py -replace '(?m)^VERSION = ".+"$', "VERSION = `"$version`""
+          Set-Content patcher.py $py -NoNewline -Encoding utf8NoBOM
+
+          $cs = Get-Content LiSUltrawidePatcher.cs -Raw
+          $cs = $cs -replace 'AssemblyVersion\(".+?"\)', "AssemblyVersion(`"$numeric`")"
+          $cs = $cs -replace 'AssemblyFileVersion\(".+?"\)', "AssemblyFileVersion(`"$numeric`")"
+          $cs = $cs -replace 'AssemblyInformationalVersion\(".+?"\)', "AssemblyInformationalVersion(`"$version`")"
+          Set-Content LiSUltrawidePatcher.cs $cs -NoNewline -Encoding utf8NoBOM
+
+          Select-String -Path patcher.py -Pattern '^VERSION'
+          Select-String -Path LiSUltrawidePatcher.cs -Pattern 'Assembly.*Version\('
+
       # The stock .NET Framework compiler, present on every Windows image and on
       # every Windows the fix targets. No SDK, no csproj, no restore step. Keep
       # this line and the one in LiSUltrawidePatcher.cs's header identical.
@@ -71,17 +97,18 @@ jobs:
           name: LiS-Ultrawide-Fix
           path: staging/LiS-Ultrawide-Fix
 
-      # The tag is date plus run number: readable, ordered, and unique even for
-      # two pushes on the same day, so no release ever replaces another. The zip
-      # keeps a fixed name, which is what makes the README's /releases/latest/
-      # download link work for every future release without being edited.
+      # The tag is the version stamped above - date plus run number: readable,
+      # ordered, and unique even for two pushes on the same day, so no release
+      # ever replaces another, and the build reports the tag it ships under. The
+      # zip keeps a fixed name, which is what makes the README's
+      # /releases/latest/ download link work for every future release.
       - name: Publish the release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v{0}.{1}' -f (Get-Date -Format 'yyyy.MM.dd'), '${{ github.run_number }}'
+          $tag = "v$env:VERSION"
           $run = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
           $notes = @(
             (git log -1 --pretty=%s),

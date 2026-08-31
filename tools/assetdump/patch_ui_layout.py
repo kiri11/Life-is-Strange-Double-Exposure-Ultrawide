@@ -19,7 +19,7 @@ BLAKE3-20 meta hash is recomputed. `.utoc` is backed up, so --restore is exact.
     python patch_ui_layout.py --width 5120 --height 2160
     python patch_ui_layout.py --restore
 """
-import argparse, json, os, shutil, struct, sys
+import argparse, hashlib, json, os, shutil, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from iostore import Toc, load_script_objects
@@ -128,39 +128,170 @@ def toc_layout(path):
                 meta_off=os.path.getsize(path) - entries * 33)
 
 
+class PatchError(Exception):
+    """A problem the user can act on - one line, no traceback."""
+
+
+SIDECAR_VERSION = 2
+HEAD = 1 << 20          # bytes of .ucas hashed as its fingerprint
+
+
+def sha256_file(path, limit=None):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        left = limit
+        while left is None or left > 0:
+            block = f.read(min(1 << 20, left) if left is not None else 1 << 20)
+            if not block:
+                break
+            h.update(block)
+            if left is not None:
+                left -= len(block)
+    return h.hexdigest()
+
+
+def container_fingerprint(utoc, ucas):
+    """What the backup is a backup OF.
+
+    The patch only ever appends to the .ucas, so the head of that file is the
+    same before and after - which makes it the thing to recognise a build by.
+    A game update rewrites both files and changes it.
+    """
+    return {'version': SIDECAR_VERSION,
+            'ucas_size': os.path.getsize(ucas),
+            'ucas_head': sha256_file(ucas, HEAD),
+            'utoc_size': os.path.getsize(utoc),
+            'utoc_sha256': sha256_file(utoc)}
+
+
+def backup_state(utoc, ucas, backup, sidecar):
+    """-> ('none' | 'valid' | 'stale' | 'legacy', note).
+
+    'stale' means the backup was taken from a different build of the game:
+    restoring it would put an old table of contents on a new container and
+    truncate 18 GB of data to the wrong length. It is never written back.
+    """
+    if not os.path.exists(backup):
+        return 'none', ''
+    if not os.path.exists(sidecar):
+        return 'legacy', 'no record of which build the backup came from'
+    try:
+        with open(sidecar) as f:
+            rec = json.load(f)
+    except (IOError, OSError, ValueError):
+        return 'stale', 'the record next to the backup is unreadable'
+    if rec.get('version', 1) < SIDECAR_VERSION:
+        return 'legacy', 'the backup predates build checking'
+    if os.path.getsize(ucas) < rec['ucas_size']:
+        return 'stale', 'the game data is smaller than when the backup was taken'
+    if sha256_file(ucas, HEAD) != rec['ucas_head']:
+        return 'stale', 'the game data has been replaced since the backup'
+    if sha256_file(backup) != rec.get('utoc_sha256'):
+        return 'stale', 'the backup file itself has changed'
+    return 'valid', ''
+
+
+def set_aside(backup, sidecar):
+    """Keep a stale backup, out of the way. -> the name it now has."""
+    for n in range(1, 100):
+        target = '%s.old%s' % (backup, '' if n == 1 else n)
+        if not os.path.exists(target):
+            os.rename(backup, target)
+            if os.path.exists(sidecar):
+                os.remove(sidecar)
+            return target
+    raise PatchError('too many old container backups in this folder - '
+                     'please tidy them up.')
+
+
+def take_backup(utoc, ucas, backup, sidecar):
+    print('backing up %s (%.1f MB)...' % (utoc, os.path.getsize(utoc) / 1e6))
+    shutil.copyfile(utoc, backup)
+    with open(sidecar, 'w') as f:
+        json.dump(container_fingerprint(backup, ucas), f)
+
+
+def reset_to_stock(utoc, ucas, backup, sidecar):
+    """Undo a previous run: the stock .utoc back, the appended blocks dropped."""
+    shutil.copyfile(backup, utoc)
+    with open(sidecar) as f:
+        orig = json.load(f)['ucas_size']
+    if os.path.getsize(ucas) > orig:
+        with open(ucas, 'r+b') as f:
+            f.truncate(orig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--paks', default=DEFAULT_PAKS)
     ap.add_argument('--width', type=int, default=5120)
     ap.add_argument('--height', type=int, default=2160)
     ap.add_argument('--restore', action='store_true')
+    ap.add_argument('--verify', action='store_true',
+                    help='report the backup state and change nothing')
     a = ap.parse_args()
 
+    if not os.path.isdir(a.paks):
+        raise PatchError("the game's data folder is not where it was expected "
+                         "(%s)." % a.paks)
     os.chdir(a.paks)
     utoc, ucas = 'pakchunk0-Windows.utoc', 'pakchunk0-Windows.ucas'
     backup, sidecar = utoc + '.original', 'pakchunk0-Windows.uipatch.json'
+    for f in (utoc, ucas):
+        if not os.path.exists(f):
+            raise PatchError('%s is missing from %s.' % (f, a.paks))
 
-    # always work from a pristine container so re-runs never stack
-    if os.path.exists(backup):
-        shutil.copyfile(backup, utoc)
-        if os.path.exists(sidecar):
+    state, why = backup_state(utoc, ucas, backup, sidecar)
+
+    if a.verify:
+        print('container: %s' % state + ((' (%s)' % why) if why else ''))
+        return
+
+    if state == 'legacy':
+        # A backup from before this check existed. It cannot be proven to match
+        # the container, but it is the only stock copy there is, so it is kept
+        # and fingerprinted now - from here on it is checkable.
+        print('note: %s - recording one now' % why)
+        record = container_fingerprint(backup, ucas)
+        try:                       # a v1 record still knew the stock .ucas size
             with open(sidecar) as f:
-                orig = json.load(f)['ucas_size']
-            if os.path.getsize(ucas) > orig:
-                with open(ucas, 'r+b') as f:
-                    f.truncate(orig)
+                record['ucas_size'] = json.load(f)['ucas_size']
+        except (IOError, OSError, ValueError, KeyError):
+            pass                   # else: today's size, appended blocks and all
+        with open(sidecar, 'w') as f:
+            json.dump(record, f)
+        state = 'valid'
+
+    if state == 'stale':
+        # The game was updated underneath us. Writing this backup back would put
+        # an old table of contents on a new container: the game would not start,
+        # and the only repair is a full re-download. So it is set aside instead.
+        aside = set_aside(backup, sidecar)
+        print('the backup was taken from a different build of the game (%s);' % why)
+        print('it has been set aside as %s.' % aside)
+        if a.restore:
+            print('the current game data is whatever the update installed - '
+                  'there is nothing of ours left in it to undo.')
+            return
+        take_backup(utoc, ucas, backup, sidecar)
+        state = 'valid'
+
+    if state == 'valid':
+        reset_to_stock(utoc, ucas, backup, sidecar)
         print('reset to stock container')
+
     if a.restore:
+        if state == 'none':
+            print('nothing to restore - this container was never patched.')
+            return
         for p in (backup, sidecar):
             if os.path.exists(p):
                 os.remove(p)
         print('stock state restored.')
         return
-    if not os.path.exists(backup):
-        print('backing up %s (%.1f MB)...' % (utoc, os.path.getsize(utoc) / 1e6))
-        shutil.copyfile(utoc, backup)
-        with open(sidecar, 'w') as f:
-            json.dump({'ucas_size': os.path.getsize(ucas)}, f)
+
+    if state == 'none':
+        take_backup(utoc, ucas, backup, sidecar)
 
     dw, dh = design_space(a.width, a.height)
     print('%dx%d -> UMG design space %.0fx%.0f\n' % (a.width, a.height, dw, dh))
@@ -260,5 +391,28 @@ def main():
     print('OK - safe to launch.' if not bad else 'FAILED - run --restore')
 
 
+def cli():
+    """Expected problems get one line; anything else keeps its traceback."""
+    try:
+        main()
+    except PatchError as ex:
+        print('error: %s' % ex)
+        sys.exit(2)
+    except (IOError, OSError) as ex:
+        win = getattr(ex, 'winerror', None)
+        if win == 32:
+            print('error: the game data is in use - close the game and Steam, '
+                  'then try again.')
+        elif win == 5 or getattr(ex, 'errno', None) == 13:
+            print('error: Windows refused permission to write the game data. '
+                  'Close the game, and if it is installed under Program Files, '
+                  'run the installer as administrator.')
+        elif win == 112 or getattr(ex, 'errno', None) == 28:
+            print('error: the drive holding the game is full.')
+        else:
+            raise
+        sys.exit(2)
+
+
 if __name__ == '__main__':
-    main()
+    cli()

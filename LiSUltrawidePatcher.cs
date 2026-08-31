@@ -32,11 +32,33 @@ using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
+
+// Identity for the file itself - Explorer's Details tab, the digital-signature
+// dialog if this is ever signed, and any bug report that quotes a file version.
+// Nothing here is shown in the window: the version a user needs to quote is the
+// one patcher.py prints into the log, and these must agree.
+//
+// The version is the release date plus that day's build number - the same string
+// as the release tag (v2026.08.31.1). AssemblyVersion wants bare numbers, so it
+// drops the zero padding; AssemblyInformationalVersion carries the exact tag
+// text. The CI build rewrites all three from the version it is publishing,
+// together with VERSION in patcher.py, so one number identifies the whole fix.
+[assembly: AssemblyTitle("Life is Strange: Double Exposure - Ultrawide Fix")]
+[assembly: AssemblyDescription("Installs the ultrawide and cutscene fix for "
+                               + "Life is Strange: Double Exposure.")]
+[assembly: AssemblyProduct("LiS:DE Ultrawide Fix")]
+[assembly: AssemblyCopyright("Copyright (C) 2026 Kiri11. "
+                             + "GPL-3.0-or-later; see LICENSE.")]
+[assembly: AssemblyVersion("2026.8.31.1")]
+[assembly: AssemblyFileVersion("2026.8.31.1")]
+[assembly: AssemblyInformationalVersion("2026.08.31.1")]
+[assembly: ComVisible(false)]
 
 namespace LiSUltrawidePatcher
 {

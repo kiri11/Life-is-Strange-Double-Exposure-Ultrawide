@@ -5,7 +5,7 @@
 **Binary:** `Chronos-Win64-Shipping.exe` (~134.5 MB)
 **Reference Resolution Tested:** 5120x2160 (21.33:9)
 
-Historical iterations of this fix (legacy patch modes, rejected approaches, intermediate experiments) are preserved in git history; the abandoned ideas are summarized in section 6.
+This describes the fix as it ships, and only that. Approaches that were tried and dropped are not documented here - with one deliberate exception: **section 6** keeps them as warnings, because each one looked right at the time and cost real work to disprove. Superseded iterations of the patch itself live in git history.
 
 ---
 
@@ -38,7 +38,7 @@ Result matrix (field-verified at 5120x2160):
 | Loading transitions | Overlay covers the full screen (with the UI patch, section 9) |
 | 16:9 displays | Behavior-neutral |
 
-**Superseded in v9.** Earlier releases also wrote the monitor aspect into two float constants - the player-camera constructor default at `0x23E665C` and the photo projection table at `0x69C8A8C`. Runtime measurement (section 10) showed they never governed what they were believed to: free-roam already renders Hor+ through cave A, and the photo pipeline is correct precisely *because* both constants keep their shipped 16:9 values. Patching them only desynchronised the dialogue hand-off. They are now left stock, and the patch is smaller for it.
+**No aspect-ratio constant is written.** In particular the player-camera constructor default at `0x23E665C` and the photo projection table at `0x69C8A8C` are left exactly as shipped. Neither governs what its location suggests: free-roam already renders Hor+ through cave A, and the photo pipeline is correct *because* both constants keep their 16:9 values (section 4; measured in section 10). Writing a monitor aspect into them is an inviting mistake - section 6.2 is there to head it off.
 
 `Engine.ini` is not required for the camera fix. The installer can optionally write chromatic-aberration and anti-blur TSR settings; see the README.
 
@@ -155,7 +155,7 @@ Both caves are written into `int3` inter-function padding runs in `.text` (first
 
 ### 3a. Patched Sites and Reference Functions
 
-The first two rows are **no longer patched** as of v9 (see 1 and 4); they are kept here because they remain useful landmarks.
+The first two rows are **not patched** (see 1 and 4). They are listed because they remain useful landmarks when reading the binary.
 
 | File Offset | VA | What |
 |---|---|---|
@@ -176,7 +176,7 @@ The binary uses two distinct "16:9" floats one bit apart - relevant when compari
 - `0x3FE38E3B` (`3B 8E E3 3F`, 1.7777779f) - camera-component constructor default;
 - `0x3FE38E39` (`39 8E E3 3F`, 1.7777778f, closest float to 16/9) - `ACineCameraActor` constructor, the photo table, computed filmback ratios, and (field-verified) the cutscene cameras' serialized aspect.
 
-Monitor-aspect values, retained for the legacy `clean`/`full` modes and because cave A's gate bound is derived from the same ratio:
+Monitor-aspect values - cave A's gate bound is derived from this ratio:
 
 | Resolution | Decimal | Hex (LE) |
 |---|---|---|
@@ -195,37 +195,33 @@ The game does not use Sequencer CineCameras for cutscenes. Native classes found 
 
 UE compiles a static projection float table at `0x69C8A8C` (`DF 7C DB 3D 55 55 55 3F 39 8E E3 3F`, where the last dword is the 16:9 aspect). The photo render matrix samples this table rather than the live viewport.
 
-**Corrected in v9.** Earlier releases patched this table's aspect to the monitor ratio, together with the player-camera constant at `0x23E665C`, on the reasoning that the photo view and the capture matrix have to agree. Both are now left **stock**, and the photo pipeline is correct precisely because of it: the capture matrix stays bit-identical to vanilla, and the square capture cameras (~1.0) sit below cave A's gate so they keep their constraint and classic projection. Field-verified - Polaroids and the in-game camera behave normally with both constants untouched. See section 10 for the measurements that overturned the original reasoning.
+This table and the player-camera constant at `0x23E665C` are both left **stock**, and the photo pipeline is correct precisely because of it: the capture matrix stays bit-identical to vanilla, and the square capture cameras (~1.0) sit below cave A's gate, so they keep their constraint and their classic projection. Field-verified - Polaroids and the in-game camera behave normally with both constants untouched.
+
+The reasoning that says otherwise - "the photo view and the capture matrix have to agree, so patch both to the monitor ratio" - is wrong in a way that only measurement settles; section 10 has the capture, and section 6.2 the warning.
 
 ---
 
 ## 5. The Loading Side-Peek (RESOLVED)
 
-### Analysis
-During loading transitions, narrow strips of the still-streaming world can appear briefly at the screen sides. Field triangulation across gate variants (see git history) established that the loading view is **the destination scene's own cutscene-class camera held behind a loading overlay UI that does not cover the extra width**. The wide camera renders correctly. Because the very same camera renders the (wanted-wide) cutscene a moment later, no camera-identity or aspect gate can pillarbox loading without regressing cutscenes - it is a UI problem, not a camera problem.
+During loading transitions, narrow strips of the still-streaming world could appear briefly at the screen sides.
 
-**Corrected 2026-08-30 (see section 9):** the earlier assumption that the overlay widget is *itself* authored/anchored at 16:9 is **false**. `BP_LoadingWindow`'s `BlackScreen` image sits in a `CanvasPanelSlot` with anchors `(0,0)-(1,1)`, offsets `(0,0,0,0)` - full viewport stretch. `BP_TransitionWindow`'s `FullscreenImage` is identical. Those widgets would cover an ultrawide viewport correctly. The 16:9 boxing is applied **upstream of the widgets**, at the UI host, and it affects every window (loading, main menu, pause, notifications) uniformly - so it is one shared cause, not a per-asset defect.
+Field triangulation across gate variants established that the loading view is **the destination scene's own cutscene-class camera, held behind a loading overlay that does not cover the extra width**. The wide camera renders correctly. Because that same camera renders the (wanted-wide) cutscene a moment later, no camera-identity or aspect gate can pillarbox loading without regressing cutscenes: it is a UI problem, not a camera problem.
 
-### Candidate Solutions (Future Work)
-1. **Streaming mitigation (`Engine.ini`, low risk, partial):** shrink the ugly window so side content appears already-loaded (still visible, but finished): `r.Streaming.PoolSize=4096`, `r.Streaming.FramesForFullUpdate=1`, optionally `s.AsyncLoadingTimeLimit=10`.
-2. **Loading overlay widget fix (ruled out, not blocked):** the containers are *not* encrypted and the overlay asset has been read (section 9). The overlay already stretches to the full viewport, so there is nothing to fix in the asset. Superseded by candidate 6.
-3. **Minimal runtime mask (complete fix, needs opt-in):** a load-event-scoped mod (e.g. UE4SS) that, during the load window only, writes the held camera's `AspectRatio` member outside cave A's (1.75, 1.8) window (e.g. 1.9f) and restores it once the level is interactive. One write per load; no per-frame contention with the caves (unlike naive per-tick flag toggling, which visibly fights the game's Blueprint camera system).
-4. **Native temporal gate (advanced):** extend cave A with a "recently loaded" check - needs a writable storage slot (new RW PE section; `.text` is R-X), a reset signal hooked into a once-per-load code path, and a time source such as `GFrameCounter`. Feasible but disproportionate.
-5. **Diagnostics:** a recorder cave appending (vtable, AspectRatio, constrain) tuples per view into an RW ring buffer, dumped externally via `ReadProcessMemory` - maps camera classes to on-screen moments with certainty, without any runtime mod inside the game.
-6. **UI host width (SOLVED - see 9c/9c-1):** `BP_UIWindowManager`'s `WindowParent` slot is a fixed 3840x2160 centred box that clips every window to 16:9. Widening it to `2160 * monitorAspect` makes the loading overlay cover the side strips by itself and puts right-anchored HUD elements on the real screen edge - both open issues close at once. Ships as an IoStore mod, not an exe patch.
-7. **Native temporal gate, revised:** section 5.4 assumed a `GFrameCounter` heuristic and a new RW PE section, and was judged disproportionate. Two facts soften it: `UChronosLoadingWindow` is a *native* class, so its construct/destruct is a clean, exact load-window signal rather than a heuristic; and `.data` alignment padding is already writable, so no new PE section is needed - one flag byte plus two small caves, with cave A consulting the flag. Still more RE work than candidate 6, but it is the exe-only route if shipping assets is undesirable.
+The overlay widget is not the culprit either. `BP_LoadingWindow`'s `BlackScreen` image sits in a `CanvasPanelSlot` anchored `(0,0)-(1,1)` with offsets `(0,0,0,0)` - a full-viewport stretch - and `BP_TransitionWindow`'s `FullscreenImage` is identical. Both would cover an ultrawide viewport correctly. The 16:9 boxing is applied **upstream of the widgets**, at the UI host, and it hits every window - loading, main menu, pause, notifications - uniformly. One shared cause, not a per-asset defect.
+
+**Resolved by the full-width UI patch (section 9c):** `BP_UIWindowManager`'s `WindowParent` is a fixed 3840x2160 centred box that clips every window to 16:9. Widening it to `2160 * monitorAspect` makes the overlay cover the side strips by itself, and puts right-anchored HUD elements on the physical screen edge - both symptoms close together. It ships as an in-place container edit rather than an executable patch; section 11 records the executable-only alternative for anyone who would rather not touch the game's data files at all.
 
 ---
 
 ## 6. Dead Ends and Technical Pitfalls Explored
 
 1. **Patching all 11 aspect constants to the monitor ratio ("full ultrawide")**: fills the screen but is Vert- - the fixed 16:9 horizontal FOV spans the wider frame, cropping ~20% of the vertical content (cut heads/chins in cinematics).
-2. **Patching only the player camera + photo table ("2-offset clean")**: correct photos and covered loading, but cutscenes stay pillarboxed and exploration is Vert- (the constrained camera at monitor aspect crops vertically, perceived as a zoom-in when leaving cutscenes). Both constants remain part of the current solution; as a *standalone* fix this mode is superseded.
+2. **Patching the player-camera constant and the photo table to the monitor ratio ("2-offset clean")**: correct photos and covered loading, but cutscenes stay pillarboxed and exploration goes Vert- (a constrained camera at monitor aspect crops vertically, felt as a zoom-in when leaving a cutscene). Worse, once the Hor+ branch is forced these two constants actively hurt: they desynchronise the dialogue hand-off, because the divisor must stay the aspect the FOV was *authored* for (2a, 10c). The shipped fix leaves both stock. This is the most tempting wrong turn in the whole binary - the addresses look exactly like the thing you want.
 3. **Unconstraining every camera unconditionally**: produces perfect Hor+ cutscenes and exploration but breaks the photo pipeline (viewfinder/capture mismatch -> skewed Polaroids) and exposes streaming during loads. Constraint policy must be selective - hence the aspect gate.
 4. **`Engine.ini` `AspectRatioAxisConstraint=AspectRatio_MaintainYFOV` alone**: ineffective - the axis constraint is only consulted on the *unconstrained* path (cutscene cameras are constrained), and the sequencer overrides/leaks the LocalPlayer value at runtime. Superseded by the branch patch (2b).
 5. **38-byte NOP replacement of the flag-copy block**: crashed at boot (`EXCEPTION_ACCESS_VIOLATION`) - the replacement clobbered instruction boundaries. Only the single 7-byte `movzx` needs replacing; also, `[rdi+0x50]` in that function is `ProjectionMode`, not the axis constraint.
 6. **C++ constructor-default patches for camera behavior** (CDO FOV values, `UCineCameraComponent::bConstrainAspectRatio` default): unreliable - cooked asset delta-serialization and Deck Nine's per-frame Blueprint camera logic re-supply values downstream of constructors. Patch the per-frame view copy instead.
-7. **UE4SS Lua per-tick camera overrides**: a polling loop toggling `bConstrainAspectRatio`/axis constraint on components visibly fights the game's Blueprint camera system (flicker, lag, delayed aspect transitions). Runtime property wrestling is a dead end in this game; if a runtime component is ever reintroduced, it must be event-scoped (see 5.3).
+7. **UE4SS Lua per-tick camera overrides**: a polling loop toggling `bConstrainAspectRatio`/axis constraint on components visibly fights the game's Blueprint camera system (flicker, lag, delayed aspect transitions). Runtime property wrestling is a dead end in this game; if a runtime component is ever reintroduced it must be event-scoped - driven by a load or dialogue event, writing once, not polling every tick.
 8. **Class-identity gates for the loading view** (cine-only unconstrain, exact-16/9 float matching in either direction): field A/B testing proved the loading view shares camera identity and aspect constants with cutscene/menu cameras in every combination tried - see section 5 for why no such gate can work.
 9. **Patching `FMinimalViewInfo::BlendViewInfo`'s flag merge** (`0x4408E19`): the function does lerp `AspectRatio` and merge `bConstrainAspectRatio` with `|=`, so a view-target blend really is constrained from weight 0 while the aspect is still 16:9. Rewriting the merge to `AND` was correct in itself and had **zero observable effect** - the constraint is re-asserted per frame from the component, so the blended value never survives. A good reminder that a real mechanism is not automatically the active one.
 10. **Chasing the dialogue-exit zoom statically** (three iterations - intrinsic Hor+/Vert- framing difference, the blend flag merge above, then the patched `0x23E665C` constant as the ramp target). All three were wrong; see section 10d. The system is *animated*, and no amount of disassembly showed that. One runtime capture did.
@@ -247,8 +243,8 @@ During loading transitions, narrow strips of the still-streaming world can appea
 
 ## 8. Tools in This Package
 
-1. **`patcher.py`** - the installer and the single source of truth for everything this fix writes. Four independent parts, all on by default: the executable camera patch, the full-width UI container patch (delegated to `tools/assetdump/`), and two `Engine.ini` tweaks (chromatic aberration off, anti-blur TSR settings) written as one removable managed block. `--restore` undoes all of it byte-for-byte. Carries PEP 723 inline metadata, so `uv run patcher.py` needs no virtualenv and fetches `blake3` itself - though nothing requires it: the standard library alone is enough (see `blake3_pure.py` below). Signature-scan fallback for game updates; always patches from the pristine `.original` backup, so re-runs never stack.
-   Advanced: `--mode` patches only the executable, in one of `cine` (shipped behaviour), `horplus`, `hybrid`, `clean`, `full`, `stock`.
+1. **`patcher.py`** - the installer and the single source of truth for everything this fix writes. Four independent parts, all on by default: the executable camera patch, the full-width UI container patch (delegated to `tools/assetdump/`), and two `Engine.ini` tweaks (chromatic aberration off, anti-blur TSR settings) written as one removable managed block. `--restore` undoes all of it byte-for-byte. Carries PEP 723 inline metadata, so `uv run patcher.py` needs no virtualenv and fetches `blake3` itself - though nothing requires it: the standard library alone is enough (see `blake3_pure.py` below). Signature-scan fallback for game updates; always patches from the pristine `.original` backup, so re-runs never stack. A backup is only trusted while it belongs to the installed build - the executable's is matched on size and PE header, the container's on a recorded fingerprint of the `.ucas` head - so a game update makes the installer set the old backup aside and re-take it rather than writing the previous build back over the new one.
+   Advanced: `--mode` patches only the executable. `cine` is the shipped behaviour and `stock` restores it; the remaining modes are earlier designs kept as escape hatches for experiments, and section 6 explains what each of them gets wrong.
 2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`, the exact command in the `.cs` header). Only the source is in the repository: `.github/workflows/build.yml` compiles the exe on every push to main and publishes it, so the binary a user downloads is always the one this source produces and cannot quietly drift from it - the failure mode an earlier committed exe made invisible. It also guarantees an interpreter: uv, then `py`, then `python`, and failing all three it downloads python.org's embeddable build (~11 MB zip, ~22 MB unpacked) into `tools/python/` (or `%LOCALAPPDATA%\LiSUltrawideFix\python` if that is not writable) and runs the patcher with that - no installer, no `PATH` change, removed with the fix. A **thin front-end only**: it finds the game (its own folder, then Steam libraries, Epic manifests and the usual game roots - the same order `find_exe()` uses), detects the display, shows the four options as checkboxes, and shells out to `patcher.py` (preferring `uv run`, then `py`, then `python`), streaming its output. The stock / already patched / unrecognised badge under the path is `patcher.py --check-exe` run in the background, so the verdict comes from the same signature table the patcher writes with. It contains no patch logic. An earlier version reimplemented the byte patches in C# and silently drifted out of sync - keeping one implementation is deliberate.
 3. **`tools/assetdump/`** - the IoStore/Zen container reader and the UI layout patcher (section 9), plus **`blake3_pure.py`**: BLAKE3 in the standard library alone, ~200x slower than the Rust extension and irrelevantly so, since a run hashes about a dozen widget packages of a few dozen KB. It exists so the full-width UI step cannot depend on installing a compiled wheel - verified against the spec's test vectors and differentially against the `blake3` module over random inputs (`python blake3_pure.py`).
 4. **`tools/make_icon.py`** - regenerates `LiSUltrawidePatcher.ico` (7 sizes, 16-256 px) with no imaging dependencies: shapes are supersampled by hand and written as PNG-compressed ICO entries via `zlib` and `struct`.
@@ -445,6 +441,10 @@ The game's data files are 97% Oodle-compressed, and Oodle ships *statically link
 
 Only step 3 touches the network, and only when the full-width UI step is actually going to run and the first two came up empty; the DLL lands in `tools/assetdump/` - or in a per-user cache (`%LOCALAPPDATA%\LiSUltrawideFix`, `~/.cache/LiSUltrawideFix`) when the fix itself sits somewhere unwritable - and is reused from then on; both places are searched on the way in. `--no-fetch-oodle` turns the download off, which skips just that one step.
 
+That download is **pinned and verified**: a fixed release tag, not `latest`, and the extracted DLL's SHA-256 is checked against a constant in `patcher.py` before it is written to disk, let alone loaded. A mismatch is refused outright rather than used with a warning - this is a native library that the installer then executes in its own process, so "probably fine" is not good enough. Moving to a newer Oodle build means changing `OODLE_RELEASE` and `OODLE_DLL_SHA256` together, having checked the new hash by hand.
+
+---
+
 ## 10. Runtime Camera Measurement - The Letterbox Ramp
 
 Sections 2-9 were derived statically. The dialogue-exit zoom resisted that approach through three wrong hypotheses, so it was settled by measurement instead: a read-only UE4SS Lua mod sampling `APlayerCameraManager` every frame and logging `ViewTarget.Target`, `ViewTarget.POV.{FOV, AspectRatio, bConstrainAspectRatio, Location}` and `CameraCachePrivate.POV` (the finished, post-blend view that reaches the renderer). It hooked nothing and wrote nothing back. **Debug only - it is not part of the shipped fix.**
@@ -509,4 +509,5 @@ Only the fourth attempt - measuring instead of inferring - produced the answer, 
 
 - **Player-menu tabs:** three full-stretch tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are not repositioned by the UI patch (section 9c). Giving them the centred box their three siblings already have needs a *structural* package edit - adding serialized properties changes the package size - which the in-place float patcher deliberately does not support.
 - **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside cave A's gate window (section 2c); the gate can be extended per report.
+- **An executable-only route to the full-width UI (section 5):** the container edit could be replaced by a load-window flag in the executable - `UChronosLoadingWindow` is a *native* class, so its construction and destruction are an exact load signal rather than a heuristic, and `.data` alignment padding is already writable, so no new PE section is needed. One flag byte, two small caves, and cave A consulting the flag. It is more reverse-engineering than the container edit, and it is the option to take if shipping a game-data change ever becomes undesirable.
 

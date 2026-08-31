@@ -29,7 +29,16 @@ Advanced: --mode patches only the executable, in one of the legacy modes
 Compatible with Python 3.6+ (3.8+ under uv).
 """
 
+# Date plus build number, the same string as the release tag it ships under
+# (tag v2026.08.31.1 -> VERSION 2026.08.31.1). The release build rewrites this
+# line, and AssemblyVersion in LiSUltrawidePatcher.cs, with the version it is
+# actually publishing - so a version quoted in a bug report names exactly one
+# build of the whole fix. The value checked in here is the last release, which
+# is what a copy run straight from the repository reports.
+VERSION = "2026.08.31.1"
+
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -37,6 +46,14 @@ import re
 import shutil
 import struct
 import sys
+
+class InstallError(Exception):
+    """A problem the user can act on: reported as one line, without a traceback.
+
+    Anything that is NOT this class is a bug in the fix, and keeps its full
+    traceback - that is what a useful issue report needs.
+    """
+
 
 # ---------------------------------------------------------------------------
 # Patch definitions
@@ -352,12 +369,13 @@ def locate(data, spec):
             spec["name"], hits[0]))
         return hits[0]
     if not hits:
-        raise RuntimeError(
-            "Signature for '{}' not found. The game executable version is not "
-            "supported by this patcher build.".format(spec["name"]))
-    raise RuntimeError(
-        "Signature for '{}' is ambiguous ({} matches).".format(
-            spec["name"], len(hits)))
+        raise InstallError(
+            "this is not a build of the game the fix knows - the code it "
+            "patches ('{}') is not in this executable. After a game update the "
+            "fix needs updating too; please report it.".format(spec["name"]))
+    raise InstallError(
+        "the code site '{}' matches in {} places, so the fix cannot tell which "
+        "one to patch. Please report this.".format(spec["name"], len(hits)))
 
 # ---------------------------------------------------------------------------
 # Checking an executable
@@ -751,103 +769,262 @@ def patch_photo_table(data, target_bytes):
     print("  patched: {} @ {:#x}".format(PHOTO_TABLE["name"], off))
 
 
-def patch_exe(exe_path, width, height, mode, gate_upper_aspect=None):
-    backup_path = exe_path + ".original"
-    if not os.path.exists(backup_path):
-        shutil.copy2(exe_path, backup_path)
-        print("Created original backup: {}".format(os.path.basename(backup_path)))
+# ---------------------------------------------------------------------------
+# Backups, and the build they belong to
+# ---------------------------------------------------------------------------
+# A backup is only a backup of the game you have right now. Steam replaces the
+# executable and the containers on every game update, and writing the previous
+# build's files back over the new ones would quietly downgrade the game - or,
+# for the 20 GB container, wreck it. So before anything is restored from a
+# backup, the backup is checked against the build that is actually installed.
+#
+# The executable needs no bookkeeping for this: the fix only ever rewrites bytes
+# in place, so a stock executable and that same executable after the fix has run
+# share their size and their PE header. A build the backup does not belong to
+# differs there.
 
-    # Always start from the clean original backup so modes never stack.
+
+def build_identity(path):
+    """(file size, PE timestamp, image size) - or None if it is not a PE file.
+
+    Unchanged by this patcher, changed by a game update: which is exactly what
+    makes it a usable "is this still the same build?" test.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(0x400)
+            f.seek(0, 2)
+            size = f.tell()
+    except (IOError, OSError):
+        return None
+    if len(head) < 0x40 or head[:2] != b"MZ":
+        return None
+    pe = struct.unpack_from("<I", head, 0x3C)[0]
+    if pe + 0x60 > len(head) or head[pe:pe + 4] != b"PE\0\0":
+        return None
+    return (size,
+            struct.unpack_from("<I", head, pe + 8)[0],        # TimeDateStamp
+            struct.unpack_from("<I", head, pe + 24 + 56)[0])  # SizeOfImage
+
+
+def backup_state(exe_path):
+    """-> ("none" | "valid" | "stale", backup path)."""
+    backup = exe_path + ".original"
+    if not os.path.isfile(backup):
+        return "none", backup
+    mine, theirs = build_identity(exe_path), build_identity(backup)
+    if mine is None or theirs is None:
+        return "stale", backup
+    return ("valid" if mine == theirs else "stale"), backup
+
+
+def archive_stale(backup):
+    """Move a backup of some other build aside - never delete it. -> new path."""
+    for n in range(1, 100):
+        target = "{}.old{}".format(backup, "" if n == 1 else n)
+        if not os.path.exists(target):
+            try:
+                os.rename(backup, target)
+            except (IOError, OSError) as ex:
+                raise InstallError(
+                    "{} was taken from a different build of the game and has to "
+                    "be moved aside, but that failed ({}). Move or delete it by "
+                    "hand and run this again."
+                    .format(os.path.basename(backup), ex))
+            return target
+    raise InstallError("there are too many old backups next to {} - please "
+                       "tidy them up.".format(os.path.basename(backup)))
+
+
+VERIFY_HINT = ("Use Steam's 'Verify Integrity of Game Files' (right-click the "
+               "game, Properties, Installed Files) to put a stock executable "
+               "back, then run this again.")
+
+
+def ensure_exe_backup(exe_path):
+    """A backup that really is the stock executable of the installed build.
+
+    This refuses rather than guesses: a backup taken from an already-patched
+    executable would make Restore a no-op for ever, and one left over from a
+    previous build would downgrade the game on the next install.
+    """
+    state, backup = backup_state(exe_path)
+    if state == "valid":
+        return backup
+
+    status = check_exe(exe_path)[0]
+    if state == "stale":
+        if status != "original":
+            raise InstallError(
+                "the backup next to the game was taken from a different build "
+                "of it, and this executable is not a stock one either, so there "
+                "is nothing safe to patch from. " + VERIFY_HINT)
+        archived = archive_stale(backup)
+        print("The backup belonged to an older build of the game - set aside as "
+              "{} and re-taken.".format(os.path.basename(archived)))
+    elif status == "patched":
+        raise InstallError(
+            "this executable is already patched but its .original backup is "
+            "gone, so there are no stock bytes left to patch from. "
+            + VERIFY_HINT)
+
+    try:
+        shutil.copy2(exe_path, backup)
+    except (IOError, OSError) as ex:
+        raise InstallError(write_failure(backup, ex))
+    print("Created original backup: {}".format(os.path.basename(backup)))
+    return backup
+
+
+def restore_exe(exe_path):
+    """Put the stock executable back, or explain why that cannot be done."""
+    state, backup = backup_state(exe_path)
+
+    if state == "valid":
+        print("\nRestoring the original stock 16:9 executable...")
+        with open(backup, "rb") as f:
+            write_exe(exe_path, f.read())
+        return True
+
+    if check_exe(exe_path)[0] == "original":
+        if state == "stale":
+            archive_stale(backup)
+        print("\nThe executable is already the stock one - nothing to restore.")
+        return True
+
+    raise InstallError(
+        ("the backup next to the game belongs to a different build of it"
+         if state == "stale" else
+         "there is no .original backup next to the game")
+        + ", and this executable is not stock, so the fix cannot restore it. "
+        + VERIFY_HINT)
+
+
+def write_failure(path, ex):
+    """Turn a write error into something the person at the keyboard can fix."""
+    win = getattr(ex, "winerror", None)
+    errno = getattr(ex, "errno", None)
+    if win == 32:
+        return ("{} is in use - close the game (and Steam) and try again."
+                .format(os.path.basename(path)))
+    if win == 5 or errno == 13:
+        return ("Windows refused permission to write {}. Close the game, and if "
+                "it is installed under Program Files, run this installer as "
+                "administrator.".format(path))
+    if win == 112 or errno == 28:
+        return "the drive holding {} is full.".format(path)
+    return "could not write {} ({}).".format(path, ex)
+
+
+def write_exe(exe_path, data):
+    """Write through a temporary file, so a failure never leaves half an exe."""
+    tmp_path = exe_path + ".tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, exe_path)
+    except (IOError, OSError) as ex:
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except (IOError, OSError):
+            pass
+        raise InstallError(write_failure(exe_path, ex))
+    print("Successfully updated {}!".format(os.path.basename(exe_path)))
+
+
+def patch_exe(exe_path, width, height, mode, gate_upper_aspect=None):
+    if mode == "stock":
+        return restore_exe(exe_path)
+
+    backup_path = ensure_exe_backup(exe_path)
+    # Always start from the checked backup, so modes and re-runs never stack.
     with open(backup_path, "rb") as f:
         data = bytearray(f.read())
 
-    if mode == "stock":
-        print("\nRestoring original stock 16:9 executable...")
+    ratio = float(width) / float(height)
+    target_bytes = struct.pack("<f", ratio)
+    hex_str = " ".join("{:02X}".format(b) for b in target_bytes)
+    print("\nTarget Resolution: {}x{}".format(width, height))
+    print("Target Aspect Ratio: {:.6f} (Hex: {})".format(ratio, hex_str))
+
+    if mode == "cine":
+        # Recommended. Three code changes, no aspect-ratio CONSTANTS at all:
+        #
+        #   1. force the Hor+ MaintainYFOV projection branch;
+        #   2. cave A - unconstrain every camera authored narrower than the
+        #      display, and pin the FOV divisor to the authored 16:9;
+        #   3. cave B - keep the cine (loading/transition) views boxed.
+        #
+        # The aspect constants at 0x23E665C and the photo table are left
+        # STOCK. Runtime measurement (RESEARCH 10) showed they do not govern
+        # the cameras the old comment claimed: free-roam already renders Hor+
+        # through cave A, and the photo pipeline is bit-identical to vanilla
+        # when both constants keep their shipped 16:9 values. Patching them
+        # only desynchronised the dialogue hand-off.
+        apply_edits(data, PATCH_AXIS)
+        gate_upper = struct.pack("<f", gate_upper_aspect
+                                 or round(max(ratio, 1.8) * 1.002, 4))
+        apply_aspect_gate_cave(data, gate_upper)
+        apply_cine_gcv_cave(data)
+        print("Applied Cine Hor+ Patch: true Hor+ ultrawide everywhere "
+              "(0% vertical crop) with unskewed photos and boxed loading "
+              "views - no zoom or snap when a dialogue hands control back.")
+    elif mode == "horplus":
+        for spec in HORPLUS_PATCHES:
+            apply_edits(data, spec)
+        patch_photo_table(data, target_bytes)
+        # 0x23E665C intentionally stays STOCK (authored aspect feeds the
+        # engine's Hor+ FOV conversion).
+        print("Applied True Hor+ Patch: full-width rendering everywhere with "
+              "0% vertical crop (cutscenes, dialogues, exploration) + "
+              "no zoom jump after cutscenes.")
+        print("NOTE: photo mode and loading views are also unconstrained in "
+              "this mode; use --mode hybrid + the UE4SS UltrawideCameraFix "
+              "mod to keep those pillarboxed 16:9.")
+    elif mode == "hybrid":
+        # Hybrid mode (recommended when UE4SS is installed):
+        # - exe only forces the Hor+ MaintainYFOV branch (neutral for
+        #   constrained cameras; also fixes the sequencer MaintainXFOV leak)
+        # - the UE4SS Lua mod decides at runtime WHICH cameras are
+        #   unconstrained: cutscenes/exploration Hor+, while photo mode and
+        #   the post-load grace period stay pillarboxed 16:9.
+        # - photo table stays STOCK: constrained photo mode is then
+        #   bit-identical to vanilla -> photos can never skew.
+        apply_edits(data, PATCH_AXIS)
+        print("Applied Hybrid Patch: Hor+ projection branch forced in the exe; "
+              "camera constraint control delegated to the UE4SS "
+              "UltrawideCameraFix mod. Photo table left stock.")
+    elif mode == "clean":
+        for off in CLEAN_OFFSETS:
+            data[off:off + 4] = target_bytes
+        print("Applied Legacy Clean Patch: ultrawide exploration + unskewed "
+              "photos + pillarboxed 16:9 cutscenes.")
+    elif mode == "full":
+        for off in ALL_ASPECT_OFFSETS:
+            data[off:off + 4] = target_bytes
+        print("Applied Legacy Full Patch: all 11 locations (edge-to-edge with "
+              "~20% vertical crop).")
     else:
-        ratio = float(width) / float(height)
-        target_bytes = struct.pack("<f", ratio)
-        hex_str = " ".join("{:02X}".format(b) for b in target_bytes)
-        print("\nTarget Resolution: {}x{}".format(width, height))
-        print("Target Aspect Ratio: {:.6f} (Hex: {})".format(ratio, hex_str))
+        raise ValueError("unknown mode: " + mode)
 
-        if mode == "cine":
-            # Recommended. Three code changes, no aspect-ratio CONSTANTS at all:
-            #
-            #   1. force the Hor+ MaintainYFOV projection branch;
-            #   2. cave A - unconstrain every camera authored narrower than the
-            #      display, and pin the FOV divisor to the authored 16:9;
-            #   3. cave B - keep the cine (loading/transition) views boxed.
-            #
-            # The aspect constants at 0x23E665C and the photo table are left
-            # STOCK. Runtime measurement (RESEARCH 10) showed they do not govern
-            # the cameras the old comment claimed: free-roam already renders Hor+
-            # through cave A, and the photo pipeline is bit-identical to vanilla
-            # when both constants keep their shipped 16:9 values. Patching them
-            # only desynchronised the dialogue hand-off.
-            apply_edits(data, PATCH_AXIS)
-            gate_upper = struct.pack("<f", gate_upper_aspect
-                                     or round(max(ratio, 1.8) * 1.002, 4))
-            apply_aspect_gate_cave(data, gate_upper)
-            apply_cine_gcv_cave(data)
-            print("Applied Cine Hor+ Patch: true Hor+ ultrawide everywhere "
-                  "(0% vertical crop) with unskewed photos and boxed loading "
-                  "views - no zoom or snap when a dialogue hands control back.")
-        elif mode == "horplus":
-            for spec in HORPLUS_PATCHES:
-                apply_edits(data, spec)
-            patch_photo_table(data, target_bytes)
-            # 0x23E665C intentionally stays STOCK (authored aspect feeds the
-            # engine's Hor+ FOV conversion).
-            print("Applied True Hor+ Patch: full-width rendering everywhere with "
-                  "0% vertical crop (cutscenes, dialogues, exploration) + "
-                  "no zoom jump after cutscenes.")
-            print("NOTE: photo mode and loading views are also unconstrained in "
-                  "this mode; use --mode hybrid + the UE4SS UltrawideCameraFix "
-                  "mod to keep those pillarboxed 16:9.")
-        elif mode == "hybrid":
-            # Hybrid mode (recommended when UE4SS is installed):
-            # - exe only forces the Hor+ MaintainYFOV branch (neutral for
-            #   constrained cameras; also fixes the sequencer MaintainXFOV leak)
-            # - the UE4SS Lua mod decides at runtime WHICH cameras are
-            #   unconstrained: cutscenes/exploration Hor+, while photo mode and
-            #   the post-load grace period stay pillarboxed 16:9.
-            # - photo table stays STOCK: constrained photo mode is then
-            #   bit-identical to vanilla -> photos can never skew.
-            apply_edits(data, PATCH_AXIS)
-            print("Applied Hybrid Patch: Hor+ projection branch forced in the exe; "
-                  "camera constraint control delegated to the UE4SS "
-                  "UltrawideCameraFix mod. Photo table left stock.")
-        elif mode == "clean":
-            for off in CLEAN_OFFSETS:
-                data[off:off + 4] = target_bytes
-            print("Applied Legacy Clean Patch: ultrawide exploration + unskewed "
-                  "photos + pillarboxed 16:9 cutscenes.")
-        elif mode == "full":
-            for off in ALL_ASPECT_OFFSETS:
-                data[off:off + 4] = target_bytes
-            print("Applied Legacy Full Patch: all 11 locations (edge-to-edge with "
-                  "~20% vertical crop).")
-        else:
-            raise ValueError("unknown mode: " + mode)
-
-
-    tmp_path = exe_path + ".tmp"
-    with open(tmp_path, "wb") as f:
-        f.write(data)
-    os.replace(tmp_path, exe_path)
-    print("Successfully updated {}!".format(os.path.basename(exe_path)))
+    write_exe(exe_path, data)
 
     # The exe patch is self-contained: disable SUWSF so it cannot re-apply
     # in-memory aspect patches on top (it would poison Hor+ mode's math).
     ini_path = os.path.join(os.path.dirname(exe_path), "SUWSF.ini")
-    if os.path.isfile(ini_path):
-        with open(ini_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-        if "Enabled=true" in content:
-            content = content.replace("Enabled=true", "Enabled=false")
-            with open(ini_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            print("Disabled conflicting SUWSF.ini in-memory patches.")
+    try:
+        if os.path.isfile(ini_path):
+            with open(ini_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            if "Enabled=true" in content:
+                content = content.replace("Enabled=true", "Enabled=false")
+                with open(ini_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print("Disabled conflicting SUWSF.ini in-memory patches.")
+    except (IOError, OSError) as ex:
+        print("  note: could not disable SUWSF.ini ({}) - if you have that "
+              "tool, turn it off by hand.".format(ex))
 
 # ---------------------------------------------------------------------------
 # CLI / interactive
@@ -995,11 +1172,14 @@ def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
     if new == old:
         print("  already up to date: {}".format(path))
         return True
-    parent = os.path.dirname(path)
-    if not os.path.isdir(parent):
-        os.makedirs(parent)
-    with io.open(path, "w", encoding="utf-8") as f:
-        f.write(new)
+    try:
+        parent = os.path.dirname(path)
+        if not os.path.isdir(parent):
+            os.makedirs(parent)
+        with io.open(path, "w", encoding="utf-8") as f:
+            f.write(new)
+    except (IOError, OSError) as ex:
+        raise InstallError(write_failure(path, ex))
     print("  {} {}".format("removed the managed block from" if remove else "wrote", path))
     return True
 
@@ -1021,8 +1201,16 @@ def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
 # actually going to run and steps 1-2 came up empty. --no-fetch-oodle turns
 # that download off; the step is then skipped and reported.
 
-OODLE_ZIP_URL = ("https://github.com/WorkingRobot/OodleUE/releases/latest/"
-                 "download/msvc-x64-release.zip")
+# Pinned, not "latest": this downloads a binary that then runs on the user's
+# machine, so it has to be a known one. The hash is of the DLL inside the zip
+# (the zip itself is repacked by the build that made it), and a mismatch means
+# the download is refused, never used. To move to a newer build, change both
+# lines together and check the new hash by hand.
+OODLE_RELEASE = "2026-06-04-1357"
+OODLE_ZIP_URL = ("https://github.com/WorkingRobot/OodleUE/releases/download/"
+                 "{}/msvc-x64-release.zip".format(OODLE_RELEASE))
+OODLE_DLL_SHA256 = \
+    "1f28ffecd7ad1b75be89ea5a85ad74b4e7f998994d7dcf5f69eddfd3bca4aeb2"
 
 OODLE_NAMES = ("oodle-data-shared.dll", "oo2core_9_win64.dll",
                "oo2core_8_win64.dll", "liboodle-data-shared.so")
@@ -1128,11 +1316,18 @@ def fetch_oodle():
             if wanted is None:
                 print("  !! the archive contained no Oodle DLL")
                 return None
-            out = os.path.join(dest_dir, "oodle-data-shared.dll")
             with z.open(wanted) as src:
-                with open(out, "wb") as dst:
-                    dst.write(src.read())
-        print("  Oodle ready: {}".format(out))
+                payload = src.read()
+        digest = hashlib.sha256(payload).hexdigest()
+        if digest != OODLE_DLL_SHA256:
+            print("  !! the downloaded decompressor is not the expected one")
+            print("     (sha256 {} - expected {})".format(digest, OODLE_DLL_SHA256))
+            print("     Refusing to use it. Nothing else was affected.")
+            return None
+        out = os.path.join(dest_dir, "oodle-data-shared.dll")
+        with open(out, "wb") as dst:
+            dst.write(payload)
+        print("  Oodle ready (sha256 verified): {}".format(out))
         return out
     except Exception as ex:
         print("  !! download failed: {}".format(ex))
@@ -1155,7 +1350,7 @@ def ensure_oodle(exe_path, allow_fetch=True):
         print("  no Oodle decompressor found, and --no-fetch-oodle was given")
         return None
     print("\n  No Oodle decompressor on this machine - fetching Epic's")
-    print("  Oodle-for-UE build (~7 MB, once):")
+    print("  Oodle-for-UE build {} (~7 MB, once):".format(OODLE_RELEASE))
     return fetch_oodle()
 
 # ---------------------------------------------------------------------------
@@ -1237,12 +1432,17 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
                 do_sharpen, restore=False, fetch_oodle_ok=True):
     if restore:
         print("\nRestoring everything to stock...")
-        patch_exe(exe_path, 16, 9, "stock")
-        apply_game_files(exe_path, width, height, restore=True,
-                         oodle_dll=find_oodle(exe_path))
-        apply_engine_ini(width, height, False, False, remove=True)
-        print("\nDone - the game is back to its shipped state.")
-        return True
+        ok = True
+        if do_exe:
+            patch_exe(exe_path, 16, 9, "stock")
+        if do_files:
+            ok = apply_game_files(exe_path, width, height, restore=True,
+                                  oodle_dll=find_oodle(exe_path)) and ok
+        if do_chromatic or do_sharpen:
+            apply_engine_ini(width, height, False, False, remove=True)
+        print("\nDone - the game is back to its shipped state." if ok else
+              "\nDone - one part could not be undone, see above.")
+        return ok
 
     ok = True
     print("\nInstalling for {}x{} ({:.4f}:1)".format(
@@ -1280,9 +1480,11 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
     return ok
 
 
-def main():
+def run():
     parser = argparse.ArgumentParser(
         description="Life is Strange: Double Exposure - ultrawide installer")
+    parser.add_argument("--version", action="version",
+                        version="LiS:DE Ultrawide Fix " + VERSION)
     parser.add_argument("--exe", help="path to Chronos-Win64-Shipping.exe "
                                       "(found automatically when omitted)")
     parser.add_argument("--find-exe", action="store_true",
@@ -1317,7 +1519,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print(" Life is Strange: Double Exposure - Ultrawide Fix")
+    print(" Life is Strange: Double Exposure - Ultrawide Fix v" + VERSION)
     print("=" * 60)
 
     exe_path = args.exe or find_exe()
@@ -1366,7 +1568,9 @@ def main():
         width, height = choose_resolution(detected)
 
     if args.restore:
-        run_install(exe_path, width, height, False, False, False, False, restore=True)
+        run_install(exe_path, width, height,
+                    not args.no_exe, not args.no_game_files,
+                    not args.no_chromatic_fix, not args.no_sharpen, restore=True)
         return
 
     do_exe = not args.no_exe
@@ -1399,6 +1603,20 @@ def main():
 
     run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
                 do_sharpen, fetch_oodle_ok=not args.no_fetch_oodle)
+
+
+def main():
+    """Expected problems get one line; anything else keeps its traceback."""
+    try:
+        run()
+    except InstallError as ex:
+        print("\nError: {}".format(ex))
+        print("\nNothing was left half-applied - the game is as it was before "
+              "this run.")
+        sys.exit(2)
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        sys.exit(130)
 
 
 if __name__ == "__main__":
