@@ -1,0 +1,4 @@
+# One convention for the whole repository. README.md was committed CRLF
+# while every other file is LF, which made any edit to it look like a
+# whole-file rewrite; this settles it as LF everywhere, checkout included.
+* text=auto eol=lf

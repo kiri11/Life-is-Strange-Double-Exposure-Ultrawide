@@ -126,7 +126,7 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 - **The full-width UI step was skipped:** it needs an Oodle decompressor, which is downloaded automatically unless you passed `--no-fetch-oodle`. If the download failed, drop any `oo2core_*_win64.dll` from another Unreal Engine game into `tools/assetdump/` and re-run.
 - **Everything looks wrong after a game update:** all code sites are located by unique byte signatures and the patcher reports cleanly if the game version is unsupported. Re-run the installer after updates.
 - **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
-- **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
+- **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
 
 ### Still broken? Open an issue
 
