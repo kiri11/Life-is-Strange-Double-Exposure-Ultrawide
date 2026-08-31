@@ -251,6 +251,7 @@ During loading transitions, narrow strips of the still-streaming world can appea
    Advanced: `--mode` patches only the executable, in one of `cine` (shipped behaviour), `horplus`, `hybrid`, `clean`, `full`, `stock`.
 2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`). A **thin front-end only**: it detects the game and display, shows the four options as checkboxes, and shells out to `patcher.py` (preferring `uv run`, then `py`, then `python`), streaming its output. It contains no patch logic. An earlier version reimplemented the byte patches in C# and silently drifted out of sync - keeping one implementation is deliberate.
 3. **`tools/assetdump/`** - the IoStore/Zen container reader and the UI layout patcher (section 9).
+4. **`tools/make_icon.py`** - regenerates `LiSUltrawidePatcher.ico` (7 sizes, 16-256 px) with no imaging dependencies: shapes are supersampled by hand and written as PNG-compressed ICO entries via `zlib` and `struct`.
 
 ---
 
