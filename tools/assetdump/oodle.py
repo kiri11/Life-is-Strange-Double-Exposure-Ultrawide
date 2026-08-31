@@ -22,16 +22,31 @@ def _locate():
         'or see tools/assetdump/README.md.')
 
 
-_dll = ctypes.CDLL(_locate())
-_f = _dll.OodleLZ_Decompress
-_f.restype = ctypes.c_ssize_t
-_f.argtypes = [ctypes.c_char_p, ctypes.c_ssize_t, ctypes.c_char_p, ctypes.c_ssize_t,
-               ctypes.c_int, ctypes.c_int, ctypes.c_int,
-               ctypes.c_void_p, ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_void_p,
-               ctypes.c_void_p, ctypes.c_ssize_t, ctypes.c_int]
+# Loaded on first use, not on import: restoring a backup needs this module's
+# importers but never decompresses anything, and a missing decompressor must not
+# stop someone putting their game back.
+_f = None
+
+
+def _load():
+    global _f
+    if _f is None:
+        dll = ctypes.CDLL(_locate())
+        fn = dll.OodleLZ_Decompress
+        fn.restype = ctypes.c_ssize_t
+        fn.argtypes = [ctypes.c_char_p, ctypes.c_ssize_t, ctypes.c_char_p,
+                       ctypes.c_ssize_t, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                       ctypes.c_void_p, ctypes.c_ssize_t, ctypes.c_void_p,
+                       ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ssize_t,
+                       ctypes.c_int]
+        _f = fn
+    return _f
+
+
 def decompress(src, dstlen):
+    fn = _load()
     dst = ctypes.create_string_buffer(dstlen)
-    n = _f(src, len(src), dst, dstlen, 1, 0, 0, None, 0, None, None, None, 0, 3)
+    n = fn(src, len(src), dst, dstlen, 1, 0, 0, None, 0, None, None, None, 0, 3)
     if n != dstlen:
         raise RuntimeError(f"oodle returned {n}, expected {dstlen}")
     return dst.raw[:dstlen]
