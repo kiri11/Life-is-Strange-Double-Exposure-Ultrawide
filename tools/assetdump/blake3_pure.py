@@ -11,9 +11,16 @@ It is ~200x slower than the Rust one and nobody cares: a run hashes about a
 dozen widget packages of a few dozen KB each.  `patch_ui_layout.py` prefers the
 real module and falls back to this one.
 
-Single-threaded, unkeyed, matching the BLAKE3 spec (chunks of 1024 bytes,
-binary tree of chaining values, extendable output).  Verified byte-for-byte
-against the reference implementation - see selftest() at the bottom.
+Single-threaded and unkeyed - the keyed and derive_key modes are not
+implemented, so misuse raises rather than returning a wrong digest.  Structure
+per the BLAKE3 spec: 1024-byte chunks, a binary tree of chaining values,
+extendable output.
+
+`python blake3_pure.py` runs the proof: the spec's own test vectors, then
+1215 differential cases against the compiled module - every input length
+across the first two chunks, both sides of every chunk boundary up to 20
+chunks (where the tree-splitting rule lives), and output lengths from 1 to 512
+bytes including the 20-byte slice this package writes into chunk metadata.
 """
 
 OUT_LEN = 32
@@ -191,24 +198,45 @@ def selftest(verbose=True):
             print("ok  vector {:5d}".format(n))
     try:
         import blake3 as _mod
-        import random
-        random.seed(0)
-        for _ in range(60):
-            n = random.choice([0, 1, 63, 64, 65, 1023, 1024, 1025, 2048, 4096,
-                               random.randrange(0, 70000)])
-            data = bytes(random.randrange(256) for _ in range(n))
-            for length in (20, 32, 64, 131):
-                mine = blake3(data).digest(length)
-                theirs = _mod.blake3(data).digest(length=length)
-                if mine != theirs:
-                    ok = False
-                    print("FAIL vs module: len={} out={}".format(n, length))
-                    break
-        if verbose:
-            print("ok  differential against the blake3 module")
     except ImportError:
-        if verbose:
-            print("(the blake3 module is not installed - vectors only)")
+        print("(the blake3 module is not installed - spec vectors only)")
+        print("PASS" if ok else "FAILED")
+        return ok
+
+    import random
+    random.seed(1234)
+
+    def differ(data, length, label):
+        if blake3(data).digest(length) != _mod.blake3(data).digest(length=length):
+            print("FAIL {} len={} out={}".format(label, len(data), length))
+            return False
+        return True
+
+    # every length across the first two chunks: 64-byte block boundaries, the
+    # short final block, the CHUNK_START/CHUNK_END flags, the 1024-byte edge
+    blob = bytes(random.randrange(256) for _ in range(1100))
+    cases = 0
+    for n in range(0, 1101):
+        ok &= differ(blob[:n], 32, "size")
+        cases += 1
+
+    # either side of every chunk boundary - where the tree-splitting rule
+    # (largest power of two below the chunk count) would go wrong
+    big = bytes(random.randrange(256) for _ in range(21 * 1024))
+    for chunks in range(1, 21):
+        for delta in (-1, 0, 1):
+            ok &= differ(big[:chunks * 1024 + delta], 32, "chunks=%d" % chunks)
+            cases += 1
+
+    # extendable output past one 64-byte block, and the 20-byte slice that
+    # actually goes into the IoStore chunk metadata
+    for length in (1, 20, 31, 32, 33, 64, 65, 131, 512):
+        for n in (0, 1, 64, 1024, 1025, 5000):
+            ok &= differ(big[:n], length, "xof")
+            cases += 1
+
+    if verbose:
+        print("ok  {} cases identical to the blake3 module".format(cases))
     print("PASS" if ok else "FAILED")
     return ok
 
