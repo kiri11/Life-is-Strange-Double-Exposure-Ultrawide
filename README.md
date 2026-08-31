@@ -16,7 +16,7 @@ Both methods run the same code - the GUI is a thin front-end over `patcher.py`, 
 4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
 5. Leave all four options ticked and click **Install**.
 
-**Python is not required.** The patch logic lives in `patcher.py`, so the program needs an interpreter to run it - it uses `uv` or a Python you already have, and on a machine with neither it downloads python.org's embeddable build (~11 MB) into its own `tools/python/` folder. Nothing is installed system-wide, no `PATH` is touched, and deleting the fix deletes it again.
+**Python is not required.** The patch logic lives in `patcher.py`, so the program needs an interpreter to run it - it uses `uv` or a Python you already have, and on a machine with neither it downloads python.org's embeddable build (~11 MB) into its own `tools/python/` folder - or into `%LOCALAPPDATA%\LiSUltrawideFix` if the fix was unpacked somewhere read-only. Nothing is installed system-wide, no `PATH` is touched, and deleting the fix deletes it again.
 
 ### Method 2: Command line (Windows / Steam Deck / Linux / Proton / macOS)
 

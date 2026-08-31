@@ -1028,17 +1028,48 @@ OODLE_NAMES = ("oodle-data-shared.dll", "oo2core_9_win64.dll",
                "oo2core_8_win64.dll", "liboodle-data-shared.so")
 
 
-def oodle_dir():
-    """Where a downloaded DLL is placed - beside the code that loads it."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "tools", "assetdump")
+def user_cache_dir():
+    """Per-user store for downloads, for when the fix's own folder is read-only."""
+    if os.name == "nt":
+        root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        root = os.path.join(os.path.expanduser("~"), "Library", "Caches")
+    else:
+        root = (os.environ.get("XDG_CACHE_HOME")
+                or os.path.join(os.path.expanduser("~"), ".cache"))
+    return os.path.join(root, "LiSUltrawideFix")
+
+
+def writable_dir(path):
+    """True if a file can be created in path, creating the directory if needed."""
+    try:
+        if not os.path.isdir(path):
+            os.makedirs(path)
+        probe = os.path.join(path, ".write-probe")
+        with open(probe, "wb"):
+            pass
+        os.remove(probe)
+        return True
+    except (IOError, OSError):
+        return False
+
+
+def oodle_dir(for_writing=False):
+    """Where the DLL goes: beside the code that loads it, or - when the fix was
+    unpacked somewhere read-only, Program Files or a shared drive - a per-user
+    cache instead. Reads look in both; only writes need to pick one."""
+    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "tools", "assetdump")
+    if not for_writing or writable_dir(beside):
+        return beside
+    return os.path.join(user_cache_dir(), "assetdump")
 
 
 def find_oodle(exe_path=None):
     """-> path to a usable Oodle DLL, or None. Never touches the network."""
     import glob
     here = os.path.dirname(os.path.abspath(__file__))
-    for d in (oodle_dir(), here):
+    for d in (oodle_dir(), os.path.join(user_cache_dir(), "assetdump"), here):
         for n in OODLE_NAMES:
             p = os.path.join(d, n)
             if os.path.isfile(p):
@@ -1072,7 +1103,7 @@ def fetch_oodle():
     except ImportError:                                   # Python 2 safety net
         from urllib2 import urlopen, Request
 
-    dest_dir = oodle_dir()
+    dest_dir = oodle_dir(for_writing=True)
     zip_path = os.path.join(dest_dir, "_oodle_download.zip")
     try:
         if not os.path.isdir(dest_dir):

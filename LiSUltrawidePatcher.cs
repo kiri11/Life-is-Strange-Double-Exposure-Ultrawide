@@ -740,27 +740,65 @@ namespace LiSUltrawidePatcher
         private const string PythonEmbedUrl =
             "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip";
 
-        private static string EmbeddedPythonDir()
+        /// <summary>Where a private interpreter may live, best place first.</summary>
+        private static List<string> EmbeddedPythonDirs()
         {
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
-                                Path.Combine("tools", "python"));
+            List<string> dirs = new List<string>();
+            dirs.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                                  Path.Combine("tools", "python")));
+            // the fix may have been unpacked somewhere unwritable - Program
+            // Files, a shared drive - so keep a per-user location in reserve
+            string local = Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData);
+            if (!string.IsNullOrEmpty(local))
+                dirs.Add(Path.Combine(local, Path.Combine("LiSUltrawideFix", "python")));
+            return dirs;
         }
 
         private static string EmbeddedPython()
         {
-            string exe = Path.Combine(EmbeddedPythonDir(), "python.exe");
-            return File.Exists(exe) ? exe : null;
+            foreach (string dir in EmbeddedPythonDirs())
+            {
+                string exe = Path.Combine(dir, "python.exe");
+                if (File.Exists(exe)) return exe;
+            }
+            return null;
+        }
+
+        /// <summary>Can a file actually be created in there?</summary>
+        private static bool Writable(string dir)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string probe = Path.Combine(dir, ".write-probe");
+                using (File.Create(probe)) { }
+                File.Delete(probe);
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>Fetch python.org's embeddable build into tools/python.</summary>
         private string FetchEmbeddedPython()
         {
-            string dir = EmbeddedPythonDir();
+            string dir = null;
+            foreach (string candidate in EmbeddedPythonDirs())
+            {
+                if (Writable(candidate)) { dir = candidate; break; }
+                Log("Cannot write to " + candidate + " - trying elsewhere.");
+            }
+            if (dir == null)
+            {
+                Log("No writable place to put an interpreter.");
+                return null;
+            }
             string zip = Path.Combine(Path.GetTempPath(), "lisde-python-embed.zip");
             try
             {
                 Log("No Python on this machine - fetching a private copy (~11 MB):");
                 Log("  " + PythonEmbedUrl);
+                Log("  into " + dir);
                 Application.DoEvents();
                 // the 4.0 default protocol list predates TLS 1.2, which python.org requires
                 ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
@@ -772,10 +810,13 @@ namespace LiSUltrawidePatcher
                 if (Directory.Exists(dir)) Directory.Delete(dir, true);
                 Directory.CreateDirectory(dir);
                 ZipFile.ExtractToDirectory(zip, dir);
-                string exe = EmbeddedPython();
-                Log(exe != null
-                    ? "  Python ready: " + exe
-                    : "  the archive contained no python.exe");
+                string exe = Path.Combine(dir, "python.exe");
+                if (!File.Exists(exe))
+                {
+                    Log("  the archive contained no python.exe");
+                    return null;
+                }
+                Log("  Python ready: " + exe);
                 return exe;
             }
             catch (Exception ex)
