@@ -12,7 +12,7 @@ Both methods run the same code - the GUI is a thin front-end over `patcher.py`, 
 
 1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/archive/refs/heads/main.zip)** and unpack the zip anywhere.
 2. Run **`LiSUltrawidePatcher.exe`** (keep it next to `patcher.py`).
-3. It finds your game installation and your display automatically - it does not matter where you unpacked the fix (see [Finding the game](#finding-the-game)).
+3. It finds your game installation and your display automatically - but if it does not find the game, use the **Browse...** button to select the game executable.
 4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
 5. Leave all four options ticked and click **Install**.
 
@@ -54,20 +54,9 @@ python patcher.py --width 5120 --height 2160 --yes
 python patcher.py --restore
 ```
 
-The game is located automatically, so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match.
+The game is located automatically ([how](RESEARCH.md#8a-where-the-installer-looks-for-the-game)), so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match.
 
 **Requirements:** Python 3.6+, or nothing at all if you let `uv` supply it. The full-width UI step also needs `blake3` (automatic under `uv`, otherwise `pip install blake3`) and an Oodle decompressor, which the installer obtains for you - [why, and from where](RESEARCH.md#9e-obtaining-the-oodle-decompressor). If either is unavailable, that one step is skipped and reported; everything else still installs.
-
-### Finding the game
-
-Neither entry point cares where it is run from. Both look, in this order:
-
-1. next to the installer itself, and next to the current folder (`Chronos/Binaries/Win64/`, up to two levels up);
-2. **every Steam library on the machine** - the Steam installations named in the registry and the usual `Program Files` locations, then each library folder listed in their `libraryfolders.vdf`, with the game's folder name read from `appmanifest_1874000.acf`;
-3. the **Epic Games Launcher** manifests in `%PROGRAMDATA%\Epic\EpicGamesLauncher\Data\Manifests`;
-4. the usual game roots on every fixed drive (`Games`, `Program Files`, `Program Files (x86)`, `GOG Games`, `Epic Games`, `SteamLibrary\steamapps\common`), including any folder whose name looks like the game's.
-
-Nothing is ever scanned recursively, so this costs a few milliseconds. On Linux, the Steam Deck and macOS the same search covers `~/.steam`, `~/.local/share/Steam` and the Flatpak Steam data folder, which is where Proton installs live. The tool reports which of the four found it, and you can always override the result - **Browse** in the GUI, `--exe` on the command line.
 
 ### Checking what you have
 

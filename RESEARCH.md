@@ -253,6 +253,17 @@ During loading transitions, narrow strips of the still-streaming world can appea
 3. **`tools/assetdump/`** - the IoStore/Zen container reader and the UI layout patcher (section 9).
 4. **`tools/make_icon.py`** - regenerates `LiSUltrawidePatcher.ico` (7 sizes, 16-256 px) with no imaging dependencies: shapes are supersampled by hand and written as PNG-compressed ICO entries via `zlib` and `struct`.
 
+### 8a. Where the Installer Looks for the Game
+
+Neither entry point cares where it is run from - `find_exe()` in `patcher.py` and `FindGameExe()` in the GUI look in the same order:
+
+1. next to the installer itself, and next to the current folder (`Chronos/Binaries/Win64/`, up to two levels up);
+2. **every Steam library on the machine** - the Steam installations named in the registry and the usual `Program Files` locations, then each library folder listed in their `libraryfolders.vdf`, with the game's folder name read from `appmanifest_1874000.acf`;
+3. the **Epic Games Launcher** manifests in `%PROGRAMDATA%\Epic\EpicGamesLauncher\Data\Manifests`;
+4. the usual game roots on every fixed drive (`Games`, `Program Files`, `Program Files (x86)`, `GOG Games`, `Epic Games`, `SteamLibrary\steamapps\common`), including any folder whose name looks like the game's.
+
+Nothing is ever scanned recursively, so this costs a few milliseconds. On Linux, the Steam Deck and macOS the same search covers `~/.steam`, `~/.local/share/Steam` and the Flatpak Steam data folder, which is where Proton installs live. The tool reports which of the four found it, and you can always override the result - **Browse** in the GUI, `--exe` on the command line.
+
 ---
 
 ## 9. Asset Pipeline and the UI Layer
