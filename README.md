@@ -87,7 +87,7 @@ The GUI shows this as a coloured line under the path (green tick / orange warnin
 | **Disable chromatic aberration** | Removes colour fringing, most visible at the widened edges | `Engine.ini` |
 | **Reduce blurriness** | Recommended TSR settings for your resolution | `Engine.ini` |
 
-All four are enabled by default and each can be turned off (`--no-exe`, `--no-game-files`, `--no-chromatic-fix`, `--no-sharpen`).
+The first three are enabled by default and each can be turned off (`--no-exe`, `--no-game-files`, `--no-chromatic-fix`); **Reduce blurriness** is opt-in (`--sharpen`).
 
 Every part creates a backup before writing: `.exe.original`, `.utoc.original`, and a clearly marked, individually removable block in `Engine.ini`. Re-running never stacks changes - each run starts from the pristine state.
 

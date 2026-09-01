@@ -20,7 +20,8 @@ Run it with no arguments for an interactive install, or:
     python patcher.py --width 5120 --height 2160 --yes
     python patcher.py --restore        # undo everything
 
-Four independent parts, all on by default:
+Four independent parts; the first three are on by default, part 4 is opt-in
+(--sharpen):
 
   1. Ultrawide camera   - patches the executable (see RESEARCH.md)
   2. Full-width UI      - patches the game data files via tools/assetdump
@@ -1517,8 +1518,11 @@ def run():
                         help=argparse.SUPPRESS)      # accepted; now the default
     parser.add_argument("--no-chromatic-fix", action="store_true",
                         help="skip disabling chromatic aberration")
+    parser.add_argument("--sharpen", action="store_true",
+                        help="also write the recommended anti-blur TSR "
+                             "settings (off by default)")
     parser.add_argument("--no-sharpen", action="store_true",
-                        help="skip the recommended anti-blur TSR settings")
+                        help=argparse.SUPPRESS)      # accepted; now the default
     parser.add_argument("--mode", choices=["cine", "horplus", "hybrid", "clean",
                                            "full", "stock"],
                         help="advanced: patch only the executable, in a given mode")
@@ -1578,16 +1582,16 @@ def run():
     if args.restore:
         run_install(exe_path, width, height,
                     not args.no_exe, not args.no_game_files,
-                    not args.no_chromatic_fix, not args.no_sharpen, restore=True)
+                    not args.no_chromatic_fix, True, restore=True)
         return
 
     do_exe = not args.no_exe
     do_files = not args.no_game_files
     do_chromatic = not args.no_chromatic_fix
-    do_sharpen = not args.no_sharpen
+    do_sharpen = args.sharpen and not args.no_sharpen
 
     if not args.yes:
-        print("\nWhat to install (all four are recommended):")
+        print("\nWhat to install:")
         do_exe = ask_yes(
             "\n  Ultrawide camera - Hor+ cutscenes, dialogue and exploration with no\n"
             "  black bars and no zoom when a dialogue ends. Patches the executable.",

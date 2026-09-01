@@ -129,9 +129,15 @@ namespace LiSUltrawidePatcher
 
         private CheckBox Option(TableLayoutPanel host, string title, string detail)
         {
+            return Option(host, title, detail, true);
+        }
+
+        private CheckBox Option(TableLayoutPanel host, string title, string detail,
+                                bool on)
+        {
             CheckBox c = new CheckBox();
             c.Text = title;
-            c.Checked = true;
+            c.Checked = on;
             c.AutoSize = true;
             c.Margin = new Padding(0, 6, 0, 0);
             c.Font = new Font(Font, FontStyle.Bold);
@@ -260,12 +266,11 @@ namespace LiSUltrawidePatcher
             chkChromatic = Option(opts, "Disable chromatic aberration",
                 "Removes the colour fringing at the widened edges.");
             chkSharpen = Option(opts, "Reduce blurriness",
-                "Recommended TSR settings for this resolution.");
+                "Recommended TSR settings for this resolution.", false);
             root.Controls.Add(opts);
 
             Label note = new Label();
-            note.Text = "The last two write one clearly-marked block into your "
-                      + "Engine.ini; Restore removes it again.";
+            note.Text = "The last two write into Engine.ini. Restore removes them.";
             note.AutoSize = true;
             note.MaximumSize = new Size(ContentWidth, 0);
             note.ForeColor = SystemColors.GrayText;
@@ -1067,7 +1072,7 @@ namespace LiSUltrawidePatcher
             if (!chkExe.Checked) argv.Add("--no-exe");
             if (!chkGameFiles.Checked) argv.Add("--no-game-files");
             if (!chkChromatic.Checked) argv.Add("--no-chromatic-fix");
-            if (!chkSharpen.Checked) argv.Add("--no-sharpen");
+            if (chkSharpen.Checked) argv.Add("--sharpen");
             Run(argv);
         }
 
