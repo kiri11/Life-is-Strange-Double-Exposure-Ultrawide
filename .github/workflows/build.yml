@@ -46,18 +46,33 @@ jobs:
   build:
     needs: test
     runs-on: windows-latest
+    # Two builds at once would read the same tag list below and pick the same
+    # number, so they take their turn instead. Never cancel: a queued push has
+    # a release of its own to cut.
+    concurrency:
+      group: release
+      cancel-in-progress: false
 
     steps:
+      # The full history, because the version below counts today's tags.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # One version number for the whole fix, written here rather than kept in
-      # step by hand: the date and this run's number, which is also the release
-      # tag. Stamping it into both files before the compile means the exe, the
-      # installer and the tag can never disagree about which build they are.
+      # step by hand: today's date and how many builds today has already had,
+      # which is also the release tag. Stamping it into both files before the
+      # compile means the exe, the installer and the tag can never disagree
+      # about which build they are.
+      #
+      # The count comes from the tags rather than from GITHUB_RUN_NUMBER, which
+      # never resets, so the number stays small and starts each day at 1.
       - name: Stamp the version
         shell: pwsh
         run: |
-          $version = '{0}.{1}' -f (Get-Date -Format 'yyyy.MM.dd'), $env:GITHUB_RUN_NUMBER
+          $today = Get-Date -Format 'yyyy.MM.dd'
+          $count = @(git tag --list "v$today.*").Count
+          $version = '{0}.{1}' -f $today, ($count + 1)
           # AssemblyVersion takes bare numbers - no zero padding, no leading zeros
           $numeric = ($version -split '\.' | ForEach-Object { [int]$_ }) -join '.'
           Write-Host "version $version (assembly $numeric)"
@@ -160,8 +175,9 @@ jobs:
           name: LiS-DE-Ultrawide-Fix-bundled-with-Python
           path: staging-python/LiS-DE-Ultrawide-Fix
 
-      # The tag is the version stamped above - date plus run number: readable,
-      # ordered, and unique even for two pushes on the same day, so no release
+      # The tag is the version stamped above - date plus today's build number:
+      # readable, sorted by GitHub the way it was built, and unique even for
+      # two pushes on the same day, so no release
       # ever replaces another, and the build reports the tag it ships under. The
       # zips keep fixed names, which is what makes the README's
       # /releases/latest/ download links work for every future release.
