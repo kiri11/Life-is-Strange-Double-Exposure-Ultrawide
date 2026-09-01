@@ -1,5 +1,13 @@
 // Life is Strange: Double Exposure - Ultrawide Fix (Windows front-end)
 //
+// Copyright (C) 2026 Kiri11.  Free software under the GNU General Public
+// License, version 3 or later - see LICENSE for the full terms.
+//
+// Additional term under GPL-3 section 7(b): every copy or modified version,
+// in source or binary form, must preserve this notice and credit the
+// original author, Kiri11, with a link to the original project at
+// https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide.
+//
 // This is deliberately a THIN front-end. It contains no patch logic of its own:
 // every option below runs patcher.py, which is the single source of truth for
 // what gets written to the executable, the game data files and Engine.ini.
