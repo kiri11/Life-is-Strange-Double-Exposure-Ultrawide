@@ -66,13 +66,16 @@ jobs:
       # about which build they are.
       #
       # The count comes from the tags rather than from GITHUB_RUN_NUMBER, which
-      # never resets, so the number stays small and starts each day at 1.
+      # never resets, so the number stays small and starts each day at 01. It
+      # is padded because GitHub orders the releases page by tag name as text,
+      # where an unpadded .10 falls under .4 and the newest build stops showing
+      # up on top; two digits is more builds in one day than this will ever see.
       - name: Stamp the version
         shell: pwsh
         run: |
           $today = Get-Date -Format 'yyyy.MM.dd'
           $count = @(git tag --list "v$today.*").Count
-          $version = '{0}.{1}' -f $today, ($count + 1)
+          $version = '{0}.{1:d2}' -f $today, ($count + 1)
           # AssemblyVersion takes bare numbers - no zero padding, no leading zeros
           $numeric = ($version -split '\.' | ForEach-Object { [int]$_ }) -join '.'
           Write-Host "version $version (assembly $numeric)"
