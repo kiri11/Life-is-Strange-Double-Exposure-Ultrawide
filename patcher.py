@@ -1145,21 +1145,30 @@ def build_ini_block(width, height, chromatic, sharpness):
 
 
 def strip_ini_block(text):
-    """Remove a previously written managed block, so re-runs never stack."""
-    out, skipping = [], False
-    for line in text.splitlines(True):
-        if line.strip() == INI_BEGIN:
-            skipping = True
-            # also drop the single blank separator line we insert before it,
-            # so removing the block restores the file byte-for-byte
-            if out and not out[-1].strip():
-                out.pop()
-            continue
-        if skipping:
-            if line.strip() == INI_END:
-                skipping = False
-            continue
-        out.append(line)
+    """Remove a previously written managed block, so re-runs never stack.
+
+    Only a complete BEGIN..END pair is removed. A BEGIN whose END is missing -
+    a hand-edited or truncated file - is left alone rather than swallowing
+    every line after it, which could be the user's own settings.
+    """
+    lines = text.splitlines(True)
+    out, i = [], 0
+    while i < len(lines):
+        if lines[i].strip() == INI_BEGIN:
+            end = i + 1
+            while end < len(lines) and lines[end].strip() != INI_END:
+                end += 1
+            if end < len(lines):
+                # also drop the single blank separator line we insert before it,
+                # so removing the block restores the file exactly as it was
+                if out and not out[-1].strip():
+                    out.pop()
+                i = end + 1
+                continue
+            print("  !! an unfinished '{}' marker is in this file - leaving "
+                  "everything after it untouched".format(INI_BEGIN.strip("; =")))
+        out.append(lines[i])
+        i += 1
     return "".join(out)
 
 
@@ -1185,8 +1194,20 @@ def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
         parent = os.path.dirname(path)
         if not os.path.isdir(parent):
             os.makedirs(parent)
-        with io.open(path, "w", encoding="utf-8") as f:
-            f.write(new)
+        # through a temporary file, so a failure never truncates settings
+        # the user had in there
+        tmp_path = path + ".tmp"
+        try:
+            with io.open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(new)
+            os.replace(tmp_path, path)
+        except (IOError, OSError):
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except (IOError, OSError):
+                pass
+            raise
     except (IOError, OSError) as ex:
         raise InstallError(write_failure(path, ex))
     print("  {} {}".format("removed the managed block from" if remove else "wrote", path))
