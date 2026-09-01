@@ -1404,6 +1404,13 @@ def apply_game_files(exe_path, width, height, restore=False, oodle_dll=None):
     cmd = [sys.executable, script, "--paks", paks_dir_for(exe_path)]
     cmd += ["--restore"] if restore else ["--width", str(width), "--height", str(height)]
     env = dict(os.environ)
+    # The child's output is decoded as UTF-8 below, so it has to be written as
+    # UTF-8. Without this the child encodes a pipe in the machine's ANSI code
+    # page, and a game path with a non-ASCII character in it comes back as
+    # mojibake - or raises UnicodeEncodeError before printing at all. The GUI
+    # sets the same pair for patcher.py itself; this covers a plain console run.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     if oodle_dll:
         env["LISDE_OODLE_DLL"] = oodle_dll
     try:
