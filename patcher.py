@@ -656,6 +656,7 @@ def _steam_installs():
                  os.path.join(home, ".local", "share", "Steam"),
                  os.path.join(home, ".var", "app", "com.valvesoftware.Steam",
                               "data", "Steam"),
+                 os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam"),
                  os.path.join(home, "Library", "Application Support", "Steam")):
         add(path)
     for drive in _fixed_drives():
@@ -1093,8 +1094,11 @@ def _proton_prefix(library):
     return os.path.join(_child(library, "steamapps"), "compatdata", STEAM_APPID, "pfx")
 
 
-def engine_ini_path(exe_path=None):
+def engine_ini_path(exe_path=None, override=None):
     """Locate the user's Engine.ini: native Windows first, then a Proton prefix.
+
+    |override| is --engine-ini, for a copy of the game that runs in a prefix
+    Steam does not manage (Heroic, Lutris, plain Wine).
 
     Under Proton the game writes its settings inside a prefix that Steam keeps
     in the same library as the game, so the game's own location is the best
@@ -1102,6 +1106,8 @@ def engine_ini_path(exe_path=None):
     creates the prefix the first time the game is started, so before that
     there is nowhere to write and this returns None.
     """
+    if override:
+        return os.path.abspath(override)
     base = os.environ.get("LOCALAPPDATA")
     if base:
         p = os.path.join(base, "Chronos", "Saved", "Config", "Windows", "Engine.ini")
@@ -1204,14 +1210,16 @@ def strip_ini_block(text):
     return "".join(out)
 
 
-def apply_engine_ini(exe_path, width, height, chromatic, sharpness, remove=False):
-    path = engine_ini_path(exe_path)
+def apply_engine_ini(exe_path, width, height, chromatic, sharpness, remove=False,
+                     override=None):
+    path = engine_ini_path(exe_path, override)
     if not path:
         print("  !! could not locate Engine.ini - skipping the display tweaks")
         if os.name != "nt":
             print("     It lives in the game's Proton prefix, which Steam creates "
                   "the first time the game is started. Start the game once, "
-                  "quit, and run this installer again.")
+                  "quit, and run this installer again. If the game runs outside "
+                  "Steam, pass --engine-ini with the path inside its prefix.")
         return False
     old = ""
     if os.path.isfile(path):
@@ -1376,7 +1384,7 @@ def choose_resolution(detected):
 
 
 def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, restore=False):
+                do_sharpen, restore=False, engine_ini=None):
     if restore:
         print("\nRestoring everything to stock...")
         ok = True
@@ -1385,7 +1393,8 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
         if do_files:
             ok = apply_game_files(exe_path, width, height, restore=True) and ok
         if do_chromatic or do_sharpen:
-            apply_engine_ini(exe_path, width, height, False, False, remove=True)
+            apply_engine_ini(exe_path, width, height, False, False, remove=True,
+                             override=engine_ini)
         print("\nDone - the game is back to its shipped state." if ok else
               "\nDone - one part could not be undone, see above.")
         return ok
@@ -1408,7 +1417,8 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
 
     print("\n[3/3] Display tweaks (Engine.ini)")
     if do_chromatic or do_sharpen:
-        apply_engine_ini(exe_path, width, height, do_chromatic, do_sharpen)
+        apply_engine_ini(exe_path, width, height, do_chromatic, do_sharpen,
+                         override=engine_ini)
     else:
         print("  skipped")
 
@@ -1441,18 +1451,15 @@ def run():
                         help="skip the ultrawide camera patch (the executable)")
     parser.add_argument("--no-game-files", action="store_true",
                         help="skip the full-width UI patch (the game data files)")
-    # accepted and ignored: older releases downloaded an Oodle decompressor for
-    # the full-width UI step, and these switched that off or on. The step now
-    # decodes with tools/assetdump/kraken.py and never downloads anything.
-    parser.add_argument("--no-fetch-oodle", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--fetch-oodle", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-chromatic-fix", action="store_true",
                         help="skip disabling chromatic aberration")
     parser.add_argument("--sharpen", action="store_true",
                         help="also write the recommended anti-blur TSR "
                              "settings (off by default)")
-    parser.add_argument("--no-sharpen", action="store_true",
-                        help=argparse.SUPPRESS)      # accepted; now the default
+    parser.add_argument("--engine-ini", metavar="PATH",
+                        help="write the display tweaks to this Engine.ini instead "
+                             "of the one found automatically - for a copy of the "
+                             "game that runs in a prefix Steam does not manage")
     parser.add_argument("--mode", choices=["cine", "horplus", "hybrid", "clean",
                                            "full", "stock"],
                         help="advanced: patch only the executable, in a given mode")
@@ -1519,13 +1526,14 @@ def run():
     if args.restore:
         run_install(exe_path, width, height,
                     not args.no_exe, not args.no_game_files,
-                    not args.no_chromatic_fix, True, restore=True)
+                    not args.no_chromatic_fix, True, restore=True,
+                    engine_ini=args.engine_ini)
         return
 
     do_exe = not args.no_exe
     do_files = not args.no_game_files
     do_chromatic = not args.no_chromatic_fix
-    do_sharpen = args.sharpen and not args.no_sharpen
+    do_sharpen = args.sharpen
 
     if not args.yes:
         print("\nWhat to install:")
@@ -1551,7 +1559,7 @@ def run():
         return
 
     run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen)
+                do_sharpen, engine_ini=args.engine_ini)
 
 
 def survive_odd_characters():

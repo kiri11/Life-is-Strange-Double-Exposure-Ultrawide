@@ -20,7 +20,9 @@ permissions:
 jobs:
   # The Kraken decoder is plain Python and has to give the same bytes on every
   # platform the fix claims - so the same vectors are decoded on Linux and on
-  # Windows, with the oldest Python the runners offer and the newest.
+  # Windows, with the oldest Python the runners offer and the newest. The
+  # path test builds a fake Steam layout in a temporary home; the Linux run is
+  # the only Linux this project is ever tried on.
   test:
     strategy:
       fail-fast: false
@@ -34,6 +36,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python tests/test_kraken.py -v
+      - run: python tests/test_paths.py
 
   build:
     needs: test
