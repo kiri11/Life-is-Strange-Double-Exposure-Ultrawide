@@ -1,177 +1,116 @@
-# Life is Strange: Double Exposure - Ultrawide & Cutscene Fix
+# Life is Strange: Double Exposure - Ultrawide Fix
 
-A lightweight, native ultrawide fix for **Life is Strange: Double Exposure** supporting 21:9, 32:9, 32:10, 16:10 and custom resolutions. Any resolution works - the installer detects yours automatically.
+A native ultrawide fix for **Life is Strange: Double Exposure**. Works with 21:9, 32:9, 32:10, 16:10 and any other resolution - the installer detects yours automatically.
+
+- Cutscenes, dialogues and exploration fill the whole screen with no black bars and no cropping.
+- No camera zoom or snap when a dialogue or cutscene ends.
+- Photos and Max's Polaroids keep their correct proportions.
+- Loading screens and HUD elements use the full width of the screen.
+- Optional: disable chromatic aberration and reduce blurriness.
+
+Nothing runs in the background and there is no performance impact. Everything can be undone with a single **Restore** button.
 
 ---
 
-## Installation
+## Installation (Windows)
 
-Both methods run the same code - the GUI is a thin front-end over `patcher.py`, so there is only one implementation to keep correct.
+1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-DE-Ultrawide-Fix.zip)** and unpack the zip anywhere.
+2. Run **`LiSUltrawidePatcher.exe`**.
+3. It finds your game and your display automatically. If it does not find the game, click **Browse...** and select the game executable.
+4. Leave the options ticked and click **Install**.
 
-### Method 1: Windows GUI
+That is it. Start the game and play.
 
-1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-DE-Ultrawide-Fix.zip)** and unpack the zip anywhere. It runs with a Python you already have, and on a PC without one the program downloads a private copy. To avoid that download - no internet on the gaming PC, or a rule against it - take **[LiS-DE-Ultrawide-Fix-bundled-with-Python.zip](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-DE-Ultrawide-Fix-bundled-with-Python.zip)** (~11 MB) instead, which has the same copy of Python already inside. It is the same fix either way.
-2. Run **`LiSUltrawidePatcher.exe`** (keep it next to `patcher.py`).
-3. It finds your game installation and your display automatically - but if it does not find the game, use the **Browse...** button to select the game executable.
-4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
-5. Leave all four options ticked and click **Install**.
+**Windows will warn you the first time.** The program is not code-signed, so SmartScreen shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**. Some antivirus tools also flag it because it modifies a game executable. The program is built by GitHub Actions from the source in this repository, so you can check exactly what it does.
 
-**Windows will warn you the first time.** The program is not code-signed - a signing certificate is a paid, identity-verified subscription, and this is a free fix - so SmartScreen shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**. Some antivirus tools flag it as well, for the same reason and because of what it does: it rewrites bytes in a game executable, which is what heuristics are built to notice.
+**No internet on the gaming PC?** The installer needs Python and downloads a small private copy if your PC has none. To skip that download, use **[LiS-DE-Ultrawide-Fix-bundled-with-Python.zip](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-DE-Ultrawide-Fix-bundled-with-Python.zip)** instead. Nothing is installed system-wide either way.
 
-None of that is something you have to take on trust. The exe in each release is compiled by GitHub Actions from `LiSUltrawidePatcher.cs` in this repository - the release notes name the commit it was built from and link the build that produced it - and it contains no patch logic of its own: it runs `patcher.py`, which is plain, readable Python sitting next to it. You can also skip the exe entirely and use [Method 2](#method-2-command-line), which does exactly the same work, or compile the exe yourself with the single command in the source file's header.
+### After a game update
 
-**Python is not required.** The patch logic lives in `patcher.py`, so the program needs an interpreter to run it - it uses `uv` or a Python you already have, and on a machine with neither it downloads python.org's embeddable build (~11 MB) into its own `tools/python/` folder - or into `%LOCALAPPDATA%\LiSUltrawideFix` if the fix was unpacked somewhere read-only. The bundled archive (`LiS-DE-Ultrawide-Fix-bundled-with-Python.zip`) ships that same build already unpacked in `tools/python/`, so it has nothing to fetch. Nothing is installed system-wide, no `PATH` is touched, and deleting the fix deletes it again.
+Run **Install** again. The same applies after Steam's **Verify Integrity of Game Files**: it puts the stock game executable back, which removes the ultrawide camera part of the fix, so run **Install** again afterwards.
 
-### Method 2: Command line
+### Undoing the fix
 
-> **Tested on Windows only.** The installer is written to work on SteamOS and the Steam Deck, and on Linux under Proton (Bazzite, CachyOS, Omarchy, or any distribution with native, Flatpak or Snap Steam): the game search knows those install layouts, `Engine.ini` is looked up inside the game's Proton prefix, and the path logic is exercised on Linux in CI. None of that has been run on real hardware, though. If you are on one of those systems and something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) - or send a pull request, it is a small installer and the platform-specific parts are all in `patcher.py`.
+Click **Restore original** in the installer.
 
-#### Optional: install uv
+---
 
-Any Python 3.6+ runs the installer with no dependencies at all, so this is optional. `uv` ([astral.sh/uv](https://astral.sh/uv)) is still the smoothest route if you would rather not think about interpreters: it supplies its own Python and the compiled `blake3`, needs no virtualenv, and installs for your user account only - no administrator rights, no system-wide changes.
+## Installation (Linux and Steam Deck)
 
-Windows:
+> **Tested on Windows only.** The installer supports SteamOS, the Steam Deck and Linux under Proton (native, Flatpak or Snap Steam), but has not been run on real hardware. If something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues).
 
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
+Requirements: Python 3.6 or newer, nothing else.
 
-macOS, Linux and Steam Deck:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-#### Run the installer
+1. Start the game once and quit, so that Steam creates the Proton prefix that holds `Engine.ini`.
+2. Download and unpack the fix. On the Steam Deck, switch to **Desktop Mode** and open **Konsole**.
+3. `cd` into the unpacked folder and run:
 
 ```bash
-python patcher.py
+python3 patcher.py
 ```
 
-or, under uv:
+Run with no arguments for an interactive install, or use flags:
 
 ```bash
-uv run patcher.py
+python3 patcher.py --yes
+python3 patcher.py --width 5120 --height 2160 --yes
+python3 patcher.py --restore
 ```
 
-On Linux and the Steam Deck the command is `python3 patcher.py` (the `python` name is not present on every distribution). Steam Deck: switch to **Desktop Mode** (power menu), open **Konsole**, `cd` into the unpacked download, and run it there. `LiSUltrawidePatcher.exe` is the Windows front-end and is not needed - the command line is the same installer. Start the game once before installing, so that Steam has created the Proton prefix that holds `Engine.ini`.
+Useful flags:
 
-Run with no arguments for an interactive install, or drive it directly:
-
-```bash
-python patcher.py --yes
-python patcher.py --width 5120 --height 2160 --yes
-python patcher.py --restore
-```
-
-The game is located automatically ([how](RESEARCH.md#8a-where-the-installer-looks-for-the-game)), so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match. If the game runs in a prefix Steam does not manage (Heroic, Lutris, plain Wine), pass `--engine-ini` with the path to `.../drive_c/users/<user>/AppData/Local/Chronos/Saved/Config/Windows/Engine.ini` inside that prefix.
-
-**Requirements:** Python 3.6+ and nothing else - the standard library covers everything, and nothing is downloaded. The full-width UI step reads the game's Oodle-compressed packages with a pure-Python Kraken decoder that ships in `tools/assetdump/` ([how](RESEARCH.md#9e-reading-oodle-compressed-packages)), and it hashes with the compiled `blake3` module when that happens to be installed, falling back to a bundled pure-Python BLAKE3 otherwise.
-
-### Checking what you have
-
-Before anything is written, the installer classifies the executable using the same byte signatures it patches through - each patch site is recognisable in both its stock and its patched form:
-
-| Verdict | Meaning |
+| Flag | Purpose |
 | :--- | :--- |
-| **Original** | Stock, and a build these signatures match - safe to install. |
-| **Already patched** | The fix is in. Installing again is still safe: every run restarts from the `.exe.original` backup, so nothing stacks. The read-out names the parts it found, including the gate bound the exe was patched for. |
-| **Unrecognised** | The signature sites are not there - a game update, or not the game's executable. |
+| `--exe <path>` | Point at a specific `Chronos-Win64-Shipping.exe` |
+| `--find-exe` | Print where the game was found and exit |
+| `--check-exe` | Report whether the executable is stock, patched or unrecognised |
+| `--engine-ini <path>` | Path to `Engine.ini` inside a prefix Steam does not manage (Heroic, Lutris, plain Wine) |
+| `--no-exe`, `--no-game-files`, `--no-chromatic-fix` | Skip individual parts of the fix |
+| `--sharpen` | Also apply the anti-blur settings |
 
-The GUI shows this as a coloured line under the path (green tick / orange warning, full detail on hover) and refreshes it after every install or restore; on the command line it is one `Executable:` line, or `--check-exe` on its own. Because the check reads the same signature table the patcher writes with, the badge cannot disagree with what **Install** would do.
+With Steam, `Engine.ini` lives at `steamapps/compatdata/1874000/pfx/drive_c/users/steamuser/AppData/Local/Chronos/Saved/Config/Windows/Engine.ini` and is found automatically.
 
-A second line reports the full-width UI. Its container is built from ten of the game's own UI packages, so it belongs to the build it was made on, and the installer records a fingerprint of the game's data next to it:
+---
 
-| Verdict | Meaning |
-| :--- | :--- |
-| **Installed for 5120x2160** | Current - built from the game as it is on disk. |
-| **Built for a different build of the game** | The game has been updated since. Install again *before playing*: the container still shadows ten packages with copies cooked for a build that is gone. |
-| **Needs installing again** | Files are missing from the set, or nothing records what they were built from. |
-| **Not installed** | The step was never run, or was restored. |
+## What each option does
 
-The check reads a megabyte of the game's data and nothing else - no decoding, no container parsing.
-
-### What each option does
-
-| Option | Effect | Touches |
+| Option | Effect | Changes |
 | :--- | :--- | :--- |
-| **Ultrawide camera** | Hor+ cutscenes, dialogue and exploration; no bars, no zoom on hand-off | `Chronos-Win64-Shipping.exe` |
-| **Full-width UI** | Loading screens cover the screen; HUD on the real edge | adds `Content/Paks/Mods/LiSUltrawideUI_P.*` |
-| **Disable chromatic aberration** | Removes colour fringing, most visible at the widened edges | `Engine.ini` |
-| **Reduce blurriness** | Recommended TSR settings for your resolution | `Engine.ini` |
+| **Ultrawide camera** | Full-width cutscenes, dialogue and exploration | `Chronos-Win64-Shipping.exe` |
+| **Full-width UI** | Loading screens and HUD use the whole screen | adds `Content/Paks/Mods/LiSUltrawideUI_P.*` |
+| **Disable chromatic aberration** | Removes colour fringing at the edges | `Engine.ini` |
+| **Reduce blurriness** | Recommended TSR settings for your resolution (off by default) | `Engine.ini` |
 
-The first three are enabled by default and each can be turned off (`--no-exe`, `--no-game-files`, `--no-chromatic-fix`); **Reduce blurriness** is opt-in (`--sharpen`).
-
-The parts that write to existing files back them up first: `.exe.original`, and a clearly marked, individually removable block in `Engine.ini`. The full-width UI needs no backup at all - it is delivered as its own small mod container (~120 KB) alongside the game's data, and the game's own files are only ever read. Re-running never stacks changes - each run starts from the pristine state.
-
-A backup belongs to the version of the game it was taken from, and the installer checks that before it trusts one. When a game update replaces the files underneath it, the old backup is set aside (renamed `.old`, never deleted) and a fresh one taken from the updated game - so re-running after an update installs onto the new version instead of writing the previous one back over it. If a backup is missing and the game is already patched, the installer stops and says so rather than guessing.
-
-> After a game update, re-run the installer. The mod container holds copies of ten UI packages taken from the build it was made on, and an update can change them; re-running rebuilds it from the updated game. Steam's **Verify Integrity of Game Files** is safe to run - it has nothing of ours to repair, since no shipped file is modified.
-
----
-
-## What This Fix Does
-
-- **True Hor+ ultrawide everywhere.** Cutscenes, dialogues and free-roam exploration all render with **0% vertical crop**: the complete 16:9 vertical framing (faces, headroom, director composition) is preserved and the horizontal field of view is *expanded* to fill your monitor. No black bars, no cut chins or foreheads.
-- **No camera zoom or snap when a dialogue or cutscene ends.** Both the sequencer's leaked aspect-axis constraint and the game's own letterbox-open animation are handled, so control returns to the player without a framing jump.
-- **Correct photo mechanics.** Max's Polaroids and the in-game camera keep proper proportions without stretching or skewing, and the photo pipeline is left bit-identical to vanilla.
-- **Full-width UI (optional).** Loading screens cover the whole screen instead of leaving the still-streaming world visible at the sides, and HUD elements such as phone notifications sit on the physical screen edge rather than an invisible 16:9 boundary.
-- **Display tweaks (optional).** Disable chromatic aberration, and apply recommended anti-blur TSR settings for your resolution.
-- **Fully static.** A handful of patched bytes in the executable plus a small mod container next to the game's data. No runtime hooks, no DLL injection, no Lua mods, no background processes, no performance impact. Behaviour-neutral on a 16:9 display.
-
-Everything is reversible with a single **Restore** action.
-
-## How It Works (Short Version)
-
-UE5 already contains perfect Hor+ math: in the `MaintainYFOV` projection path it derives the vertical FOV from the aspect ratio the camera was *authored* for (`vFOV = 2*atan(tan(hFOV/2) / authoredAspect)`) and then expands horizontally to the real viewport. The fix is three code changes and no aspect-ratio constants at all:
-
-1. **Force that Hor+ projection branch** for every perspective camera (2 bytes). This also neutralises the sequencer bug that leaks `MaintainXFOV` after a cutscene.
-2. **[Cave](https://en.wikipedia.org/wiki/Code_cave) A** in `UCameraComponent::GetCameraView`: unconstrain every camera authored *narrower* than your display, and **pin the FOV divisor to the authored 16:9**. The pin matters because the game *animates* a camera's `AspectRatio` up to the viewport aspect when it hands control back from a dialogue - its letterbox-open animation. Without the pin, the forced Hor+ branch reads that animation as a vertical-FOV change, which is exactly the zoom-and-snap this fix removes.
-3. **Cave B** on the unique `UCineCameraComponent` super-call, keeping the game's cine-class views (loading and transition holds) constrained.
-
-See [RESEARCH.md](RESEARCH.md) for the complete technical breakdown, including the runtime measurements that identified the letterbox ramp.
-
----
-
-## Display Tweaks in Detail
-
-The last two options write one managed block into `%localappdata%\Chronos\Saved\Config\Windows\Engine.ini`. On Linux and the Steam Deck that file lives inside the game's Proton prefix, `steamapps/compatdata/1874000/pfx/drive_c/users/steamuser/AppData/Local/Chronos/Saved/Config/Windows/Engine.ini` in the Steam library that holds the game, and the installer looks there. Steam creates the prefix the first time the game is started, so start the game once before installing. Your existing settings are left untouched, and `--restore` removes the block byte-for-byte.
-
-TSR - UE5's temporal upscaler - is what makes this game look soft. The two settings that matter most are rendering at 100% of the output resolution instead of upscaling from a lower one, and giving TSR a history buffer above output resolution to resolve detail from. The history multiplier is the expensive one, so it is scaled back at very high pixel counts (200 below ~8 MP, 150 above). These are a sane starting point rather than gospel - every line is an ordinary UE console variable, commented in the file, and safe to edit afterwards.
+The game executable is backed up as `.exe.original` before it is changed, and the `Engine.ini` settings are added as a clearly marked block. Running the installer again never stacks changes.
 
 ---
 
 ## Troubleshooting
 
-- **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
-- **The full-width UI step reported an error reading a package:** the game's packages are decoded by `tools/assetdump/kraken.py`, and a package it cannot read is a bug in that decoder or a game update that changed the compression. Say so in an issue with the exact line - it names the package.
-- **The UI is still 16:9 after a game update:** the installer's second status line will say the container was built for a different build. Run **Install** again.
-- **The UI is still 16:9 in game:** check that `Chronos/Content/Paks/Mods/LiSUltrawideUI_P.utoc`, `.ucas` and `.pak` are all present - the three belong together. If they are and nothing changed, say so in an issue with your resolution; the container is only mounted if the game scans that folder, and that is the one thing this fix cannot check from outside the game.
-- **Everything looks wrong after a game update:** re-run the installer. It re-takes its backups from the updated game, and all code sites are located by unique byte signatures, so it either patches the new build or tells you in one line that this build needs a new version of the fix.
-- **"The system refused permission to write the game files":** the game is installed somewhere only an administrator may write to, usually under Program Files. The GUI offers to run the same install again as administrator - say yes to the Windows prompt. On the command line, start the terminal as administrator and re-run `python patcher.py`.
-- **"Could not locate Engine.ini" on Linux or the Steam Deck:** the game has not been started yet, so its Proton prefix does not exist. Start the game once, quit, and run the installer again - the other parts of the fix were installed and stay installed. For a copy that runs outside Steam, pass `--engine-ini` (see [Method 2](#method-2-command-line)).
-- **Windows or your antivirus blocked the installer:** the program is unsigned, so SmartScreen needs **More info -> Run anyway**. If an antivirus quarantined it, restore the file and exclude the folder, or leave the exe alone and run `python patcher.py` instead ([Method 2](#method-2-command-line)) - the two are the same installer.
-- **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
-- **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
+- **Windows or your antivirus blocked the installer:** click **More info**, then **Run anyway**. If an antivirus quarantined it, restore the file and exclude the folder.
+- **The installer cannot find the game:** click **Browse** and select `Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe` inside the game folder.
+- **"The system refused permission to write the game files":** the game is installed somewhere only an administrator may write to. The installer offers to run again as administrator - say yes.
+- **The fix stopped working after a game update or Verify Integrity:** run **Install** again. If the installer says the game version is not recognised, a new version of the fix is needed.
+- **A cutscene shows black bars:** report which scene, so its camera can be included.
+- **The UI is still 16:9 in game:** check that `Chronos/Content/Paks/Mods/LiSUltrawideUI_P.utoc`, `.ucas` and `.pak` are all present. If they are, open an issue with your resolution.
+- **"Could not locate Engine.ini" on Linux or the Steam Deck:** start the game once, quit, and run the installer again.
 
 ### Still broken? Open an issue
 
-[Open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) with as much detail as you can. What helps most:
+[Open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) and include:
 
-- **What you did** - GUI or command line, which of the four options were ticked, and whether the game had been patched before.
-- **What is wrong and where** - the scene, menu or moment it happens in, what you see versus what you expected, and a screenshot or clip if you can take one.
-- **Your setup** - display resolution, and whether the game is the Steam, Epic or another copy.
-- **What the installer said** - the whole GUI log box or the console output, plus the output of `python patcher.py --check-exe`, which reports the path it found and whether that executable is stock, patched or unrecognised.
+- What you did and which options were ticked.
+- What is wrong and where, with a screenshot if possible.
+- Your display resolution and where the game came from (Steam, Epic, other).
+- The installer's log output.
 
 ---
 
-## Technical Documentation & Research
+## Technical details
 
-For the reverse-engineering breakdown, Unreal Engine 5 projection-matrix analysis, disassembly of the patched sites, the asset-container tooling, the runtime camera measurements, the open work still on the table, and the dead ends explored, see **[RESEARCH.md](RESEARCH.md)**. Historical iterations of this fix are preserved in git history.
+The fix changes a handful of bytes in the game executable to force Unreal Engine's built-in Hor+ projection for every camera, and adds a small mod container with full-width versions of the game's UI packages. The complete reverse-engineering breakdown is in **[RESEARCH.md](RESEARCH.md)**.
 
-### Building the GUI yourself
-
-The repository holds no executable. `LiSUltrawidePatcher.exe` is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) by [the release workflow](.github/workflows/build.yml) on every push to `main`, and each release names the commit it was built from - so the download can always be traced back to the source, and the two cannot drift apart. Every release archive also ships that `.cs`, stamped with the version the exe beside it carries, so the source travels with the download instead of only living here. Building it yourself needs no SDK, just the compiler that ships with Windows:
+`LiSUltrawidePatcher.exe` is a thin Windows front-end that runs `patcher.py`. It is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) by [the release workflow](.github/workflows/build.yml), and each release names the commit it was built from. To build it yourself with the compiler that ships with Windows:
 
 ```
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32icon:LiSUltrawidePatcher.ico /out:LiSUltrawidePatcher.exe LiSUltrawidePatcher.cs /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
@@ -181,8 +120,6 @@ The repository holds no executable. `LiSUltrawidePatcher.exe` is compiled from [
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). You are free to use, study, modify and redistribute it; any distributed modification must ship its complete source under the same terms.
-
-The release archive is its own complete corresponding source. The only compiled file in it is `LiSUltrawidePatcher.exe`, and the `LiSUltrawidePatcher.cs` it was built from is packed beside it, along with `patcher.py` and every module the fix actually runs - so a copy of the zip satisfies GPL-3 section 6 by itself, wherever it was downloaded from and whether or not this repository is reachable. The bundled archive adds python.org's embeddable Python, unmodified, in `tools/python/` with its own `LICENSE.txt`; it is a separate program under the PSF license, not part of this fix.
+This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). The release archive contains its complete source: `LiSUltrawidePatcher.cs`, `patcher.py` and every module the fix runs. The bundled archive also contains python.org's embeddable Python, unmodified, under its own PSF license in `tools/python/`.
 
 As an additional term under GPL-3.0 section 7(b), every copy or modified version must preserve the copyright notice and credit the original author, Kiri11, with a link to this project.
