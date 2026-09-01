@@ -154,7 +154,7 @@ For the reverse-engineering breakdown, Unreal Engine 5 projection-matrix analysi
 
 ### Building the GUI yourself
 
-The repository holds no executable. `LiSUltrawidePatcher.exe` is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) by [the release workflow](.github/workflows/build.yml) on every push to `main`, and each release names the commit it was built from - so the download can always be traced back to the source, and the two cannot drift apart. Building it yourself needs no SDK, just the compiler that ships with Windows:
+The repository holds no executable. `LiSUltrawidePatcher.exe` is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) by [the release workflow](.github/workflows/build.yml) on every push to `main`, and each release names the commit it was built from - so the download can always be traced back to the source, and the two cannot drift apart. Every release archive also ships that `.cs`, stamped with the version the exe beside it carries, so the source travels with the download instead of only living here. Building it yourself needs no SDK, just the compiler that ships with Windows:
 
 ```
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32icon:LiSUltrawidePatcher.ico /out:LiSUltrawidePatcher.exe LiSUltrawidePatcher.cs /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
@@ -165,5 +165,7 @@ The repository holds no executable. `LiSUltrawidePatcher.exe` is compiled from [
 ## License
 
 This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). You are free to use, study, modify and redistribute it; any distributed modification must ship its complete source under the same terms.
+
+The release archive is its own complete corresponding source. The only compiled file in it is `LiSUltrawidePatcher.exe`, and the `LiSUltrawidePatcher.cs` it was built from is packed beside it, along with `patcher.py` and every module the fix actually runs - so a copy of the zip satisfies GPL-3 section 6 by itself, wherever it was downloaded from and whether or not this repository is reachable.
 
 As an additional term under GPL-3.0 section 7(b), every copy or modified version must preserve the copyright notice and credit the original author, Kiri11, with a link to this project.
