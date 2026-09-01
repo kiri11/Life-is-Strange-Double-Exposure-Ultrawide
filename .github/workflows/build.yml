@@ -101,7 +101,7 @@ jobs:
       - name: Stage the release files
         shell: pwsh
         run: |
-          $root = 'staging/LiS-Ultrawide-Fix'
+          $root = 'staging/LiS-DE-Ultrawide-Fix'
           New-Item -ItemType Directory -Path "$root/tools/assetdump" -Force | Out-Null
           $top = @(
             'LiSUltrawidePatcher.exe',   # the GUI front-end, built above
@@ -121,7 +121,7 @@ jobs:
           )
           foreach ($f in $top) { Copy-Item $f "$root/$f" }
           foreach ($f in $assetdump) { Copy-Item "tools/assetdump/$f" "$root/tools/assetdump/$f" }
-          Compress-Archive -Path $root -DestinationPath 'LiS-Ultrawide-Fix.zip'
+          Compress-Archive -Path $root -DestinationPath 'LiS-DE-Ultrawide-Fix.zip'
           Get-ChildItem -Recurse $root | Select-Object FullName, Length
 
       # The same files plus python.org's embeddable build, unpacked into
@@ -139,26 +139,26 @@ jobs:
           $got = (Get-FileHash python-embed.zip -Algorithm SHA256).Hash.ToLower()
           if ($got -ne $sha256) { throw "python-embed.zip: SHA-256 $got, expected $sha256" }
 
-          $root = 'staging-python/LiS-Ultrawide-Fix'
+          $root = 'staging-python/LiS-DE-Ultrawide-Fix'
           New-Item -ItemType Directory -Path 'staging-python' -Force | Out-Null
-          Copy-Item -Recurse 'staging/LiS-Ultrawide-Fix' $root
+          Copy-Item -Recurse 'staging/LiS-DE-Ultrawide-Fix' $root
           Expand-Archive -Path python-embed.zip -DestinationPath "$root/tools/python"
           if (-not (Test-Path "$root/tools/python/python.exe")) { throw 'no python.exe in the embeddable archive' }
           # the bundled interpreter has to run the installer, not only exist
           & "$root/tools/python/python.exe" "$root/patcher.py" --version
           if ($LASTEXITCODE -ne 0) { throw 'the bundled Python cannot run patcher.py' }
-          Compress-Archive -Path $root -DestinationPath 'LiS-Ultrawide-Fix-with-Python.zip'
-          Get-ChildItem 'LiS-Ultrawide-Fix.zip', 'LiS-Ultrawide-Fix-with-Python.zip' | Select-Object Name, Length
+          Compress-Archive -Path $root -DestinationPath 'LiS-DE-Ultrawide-Fix-bundled-with-Python.zip'
+          Get-ChildItem 'LiS-DE-Ultrawide-Fix.zip', 'LiS-DE-Ultrawide-Fix-bundled-with-Python.zip' | Select-Object Name, Length
 
       # Available on pull requests too, so a build can be tested before it ships.
       - uses: actions/upload-artifact@v7
         with:
-          name: LiS-Ultrawide-Fix
-          path: staging/LiS-Ultrawide-Fix
+          name: LiS-DE-Ultrawide-Fix
+          path: staging/LiS-DE-Ultrawide-Fix
       - uses: actions/upload-artifact@v7
         with:
-          name: LiS-Ultrawide-Fix-with-Python
-          path: staging-python/LiS-Ultrawide-Fix
+          name: LiS-DE-Ultrawide-Fix-bundled-with-Python
+          path: staging-python/LiS-DE-Ultrawide-Fix
 
       # The tag is the version stamped above - date plus run number: readable,
       # ordered, and unique even for two pushes on the same day, so no release
@@ -176,10 +176,12 @@ jobs:
           $notes = @(
             (git log -1 --pretty=%s),
             '',
-            'Download **LiS-Ultrawide-Fix.zip** below, unpack it anywhere and run `LiSUltrawidePatcher.exe`.',
+            'Download **LiS-DE-Ultrawide-Fix.zip** (recommended), unpack it anywhere and run `LiSUltrawidePatcher.exe` on Windows or `python3 patcher.py` on Linux and the Steam Deck.',
             '',
-            '**LiS-Ultrawide-Fix-with-Python.zip** is the same fix with a private copy of Python inside, so nothing is ever downloaded - for machines without Python or without internet access.',
+            'It runs with the Python already on the machine. On a Windows PC without one, `LiSUltrawidePatcher.exe` downloads a private copy (~11 MB) into its own folder.',
+            '',
+            '**LiS-DE-Ultrawide-Fix-bundled-with-Python.zip** is the same fix with that copy of Python already inside, so nothing is downloaded. The bundled Python is only used on Windows.',
             '',
             ('Built from `${{ github.sha }}` by [this run](' + $run + ').')
           ) -join "`n"
-          gh release create $tag 'LiS-Ultrawide-Fix.zip' 'LiS-Ultrawide-Fix-with-Python.zip' --title $tag --notes $notes
+          gh release create $tag 'LiS-DE-Ultrawide-Fix.zip' 'LiS-DE-Ultrawide-Fix-bundled-with-Python.zip' --title $tag --notes $notes
