@@ -6,6 +6,11 @@
 # Every push to main cuts its own release and no release is ever overwritten, so
 # a build that turns out bad can always be compared against the one before it.
 # Put [skip ci] in the commit subject to push without releasing.
+#
+# Each release carries two archives with the same contents, except that the
+# second also holds python.org's embeddable Python, so the GUI never has to
+# download one. That is the archive for mod sites, whose rules frown on files
+# that fetch things from the internet; the small one is for everyone else.
 name: Build and release
 
 on:
@@ -119,17 +124,47 @@ jobs:
           Compress-Archive -Path $root -DestinationPath 'LiS-Ultrawide-Fix.zip'
           Get-ChildItem -Recurse $root | Select-Object FullName, Length
 
+      # The same files plus python.org's embeddable build, unpacked into
+      # tools/python - the place LiSUltrawidePatcher.cs looks before it would
+      # download one. The URL is read from the .cs so the two cannot disagree;
+      # the digest is pinned here and has to be updated with it, so a swapped
+      # download fails the build rather than shipping.
+      - name: Stage the archive with Python bundled
+        shell: pwsh
+        run: |
+          $url = (Select-String -Path LiSUltrawidePatcher.cs -Pattern 'https://www\.python\.org/ftp/python/[^"]+-embed-amd64\.zip').Matches[0].Value
+          $sha256 = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'   # python-3.12.10-embed-amd64.zip
+          Write-Host "fetching $url"
+          Invoke-WebRequest -Uri $url -OutFile python-embed.zip
+          $got = (Get-FileHash python-embed.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha256) { throw "python-embed.zip: SHA-256 $got, expected $sha256" }
+
+          $root = 'staging-python/LiS-Ultrawide-Fix'
+          New-Item -ItemType Directory -Path 'staging-python' -Force | Out-Null
+          Copy-Item -Recurse 'staging/LiS-Ultrawide-Fix' $root
+          Expand-Archive -Path python-embed.zip -DestinationPath "$root/tools/python"
+          if (-not (Test-Path "$root/tools/python/python.exe")) { throw 'no python.exe in the embeddable archive' }
+          # the bundled interpreter has to run the installer, not only exist
+          & "$root/tools/python/python.exe" "$root/patcher.py" --version
+          if ($LASTEXITCODE -ne 0) { throw 'the bundled Python cannot run patcher.py' }
+          Compress-Archive -Path $root -DestinationPath 'LiS-Ultrawide-Fix-with-Python.zip'
+          Get-ChildItem 'LiS-Ultrawide-Fix.zip', 'LiS-Ultrawide-Fix-with-Python.zip' | Select-Object Name, Length
+
       # Available on pull requests too, so a build can be tested before it ships.
       - uses: actions/upload-artifact@v7
         with:
           name: LiS-Ultrawide-Fix
           path: staging/LiS-Ultrawide-Fix
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LiS-Ultrawide-Fix-with-Python
+          path: staging-python/LiS-Ultrawide-Fix
 
       # The tag is the version stamped above - date plus run number: readable,
       # ordered, and unique even for two pushes on the same day, so no release
       # ever replaces another, and the build reports the tag it ships under. The
-      # zip keeps a fixed name, which is what makes the README's
-      # /releases/latest/ download link work for every future release.
+      # zips keep fixed names, which is what makes the README's
+      # /releases/latest/ download links work for every future release.
       - name: Publish the release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
@@ -143,6 +178,8 @@ jobs:
             '',
             'Download **LiS-Ultrawide-Fix.zip** below, unpack it anywhere and run `LiSUltrawidePatcher.exe`.',
             '',
+            '**LiS-Ultrawide-Fix-with-Python.zip** is the same fix with a private copy of Python inside, so nothing is ever downloaded - for machines without Python or without internet access.',
+            '',
             ('Built from `${{ github.sha }}` by [this run](' + $run + ').')
           ) -join "`n"
-          gh release create $tag 'LiS-Ultrawide-Fix.zip' --title $tag --notes $notes
+          gh release create $tag 'LiS-Ultrawide-Fix.zip' 'LiS-Ultrawide-Fix-with-Python.zip' --title $tag --notes $notes

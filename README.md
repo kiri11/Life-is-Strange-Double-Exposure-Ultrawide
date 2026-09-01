@@ -10,17 +10,17 @@ Both methods run the same code - the GUI is a thin front-end over `patcher.py`, 
 
 ### Method 1: Windows GUI
 
-1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix.zip)** and unpack the zip anywhere.
+1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix.zip)** and unpack the zip anywhere. There is also a **[version with Python bundled](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix-with-Python.zip)** (~12 MB), which never downloads anything - take that one on a machine without Python or without internet access. It is the same fix; the choice only decides where the interpreter comes from.
 2. Run **`LiSUltrawidePatcher.exe`** (keep it next to `patcher.py`).
 3. It finds your game installation and your display automatically - but if it does not find the game, use the **Browse...** button to select the game executable.
 4. Check the badge under the path: a green tick means a stock executable this build knows, and an orange warning means it is already patched or is not a version the signatures match (hover it for the details).
 5. Leave all four options ticked and click **Install**.
 
-**Windows will warn you the first time.** The program is not code-signed - a signing certificate is a paid, identity-verified subscription, and this is a free fix - so SmartScreen shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**. Some antivirus tools flag it as well, for the same reason and because of what it does: it rewrites bytes in a game executable and downloads a decompressor, which is what heuristics are built to notice.
+**Windows will warn you the first time.** The program is not code-signed - a signing certificate is a paid, identity-verified subscription, and this is a free fix - so SmartScreen shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**. Some antivirus tools flag it as well, for the same reason and because of what it does: it rewrites bytes in a game executable, which is what heuristics are built to notice.
 
 None of that is something you have to take on trust. The exe in each release is compiled by GitHub Actions from `LiSUltrawidePatcher.cs` in this repository - the release notes name the commit it was built from and link the build that produced it - and it contains no patch logic of its own: it runs `patcher.py`, which is plain, readable Python sitting next to it. You can also skip the exe entirely and use [Method 2](#method-2-command-line), which does exactly the same work, or compile the exe yourself with the single command in the source file's header.
 
-**Python is not required.** The patch logic lives in `patcher.py`, so the program needs an interpreter to run it - it uses `uv` or a Python you already have, and on a machine with neither it downloads python.org's embeddable build (~11 MB) into its own `tools/python/` folder - or into `%LOCALAPPDATA%\LiSUltrawideFix` if the fix was unpacked somewhere read-only. Nothing is installed system-wide, no `PATH` is touched, and deleting the fix deletes it again.
+**Python is not required.** The patch logic lives in `patcher.py`, so the program needs an interpreter to run it - it uses `uv` or a Python you already have, and on a machine with neither it downloads python.org's embeddable build (~11 MB) into its own `tools/python/` folder - or into `%LOCALAPPDATA%\LiSUltrawideFix` if the fix was unpacked somewhere read-only. The bundled archive ships that same build already unpacked in `tools/python/`, so it has nothing to fetch. Nothing is installed system-wide, no `PATH` is touched, and deleting the fix deletes it again.
 
 ### Method 2: Command line
 
@@ -183,6 +183,6 @@ The repository holds no executable. `LiSUltrawidePatcher.exe` is compiled from [
 
 This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). You are free to use, study, modify and redistribute it; any distributed modification must ship its complete source under the same terms.
 
-The release archive is its own complete corresponding source. The only compiled file in it is `LiSUltrawidePatcher.exe`, and the `LiSUltrawidePatcher.cs` it was built from is packed beside it, along with `patcher.py` and every module the fix actually runs - so a copy of the zip satisfies GPL-3 section 6 by itself, wherever it was downloaded from and whether or not this repository is reachable.
+The release archive is its own complete corresponding source. The only compiled file in it is `LiSUltrawidePatcher.exe`, and the `LiSUltrawidePatcher.cs` it was built from is packed beside it, along with `patcher.py` and every module the fix actually runs - so a copy of the zip satisfies GPL-3 section 6 by itself, wherever it was downloaded from and whether or not this repository is reachable. The bundled archive adds python.org's embeddable Python, unmodified, in `tools/python/` with its own `LICENSE.txt`; it is a separate program under the PSF license, not part of this fix.
 
 As an additional term under GPL-3.0 section 7(b), every copy or modified version must preserve the copyright notice and credit the original author, Kiri11, with a link to this project.
