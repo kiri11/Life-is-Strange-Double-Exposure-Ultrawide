@@ -19,7 +19,10 @@
 // dependency (blake3, used by the game-files step) automatically. Failing that
 // it uses the Python launcher, then plain python, and on a machine with no
 // Python at all it downloads python.org's embeddable build into tools/python
-// and runs the patcher with that - so the fix works either way.
+// and runs the patcher with that - so the fix works either way. Each of those
+// is tried in turn rather than picked once: uv without a network, or the
+// zero-byte Microsoft Store python.exe, must not be the end of the road on a
+// machine that has another way to run the script.
 //
 // Build (stock .NET Framework compiler, no SDK required):
 //   %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe ^
@@ -721,46 +724,53 @@ namespace LiSUltrawidePatcher
             string script = ScriptPath();
             if (script == null) { status = "noscript"; return; }
 
-            StringBuilder tail = new StringBuilder();
-            tail.Append('"').Append(script).Append('"');
-            tail.Append(" --check-exe --exe ").Append('"').Append(path).Append('"');
+            List<string> argv = new List<string>();
+            argv.Add("--check-exe");
+            argv.Add("--exe");
+            argv.Add("\"" + path + "\"");
 
-            string exe, args;
-            string own = EmbeddedPython();
-            if (Which("py") != null) { exe = "py"; args = "-3 " + tail; }
-            else if (Which("python") != null) { exe = "python"; args = tail.ToString(); }
-            else if (own != null) { exe = own; args = tail.ToString(); }
-            else
-            {
-                string uv = uvCheckAllowed ? FindUv() : null;
-                if (uv == null) { status = "norunner"; return; }
-                exe = uv;
-                args = "run --quiet --script " + tail;
-            }
+            // Every runner in turn: one that cannot start Python at all must not
+            // be the reason the badge says "could not check" while the next one
+            // in the list would have answered.
+            List<Runner> runners = Runners(script, argv, uvCheckAllowed);
+            if (runners.Count == 0) { status = "norunner"; return; }
 
-            try
+            foreach (Runner r in runners)
             {
-                ProcessStartInfo psi = new ProcessStartInfo(exe, args);
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-                psi.RedirectStandardOutput = true;
-                psi.WorkingDirectory = Path.GetDirectoryName(script);
-                using (Process p = Process.Start(psi))
+                try
                 {
-                    string text = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit();
-                    foreach (string line in text.Split('\n'))
+                    using (Process p = Process.Start(Launch(r, script)))
                     {
-                        string t = line.Trim();
-                        if (t.StartsWith("status: ")) status = t.Substring(8).Trim();
-                        else if (t.StartsWith("detail: ")) detail = t.Substring(8).Trim();
+                        // drained on its own thread: a runner that writes a
+                        // long complaint to stderr would otherwise fill its
+                        // pipe and hang while we read the other one
+                        Process capture = p;
+                        ThreadPool.QueueUserWorkItem(delegate
+                        {
+                            try { capture.StandardError.ReadToEnd(); }
+                            catch { }
+                        });
+                        string text = p.StandardOutput.ReadToEnd();
+                        p.WaitForExit();
+                        bool answered = false;
+                        foreach (string line in text.Split('\n'))
+                        {
+                            string t = line.Trim();
+                            if (t.StartsWith("status: "))
+                            {
+                                status = t.Substring(8).Trim();
+                                answered = true;
+                            }
+                            else if (t.StartsWith("detail: ")) detail = t.Substring(8).Trim();
+                        }
+                        if (answered) return;
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                status = "error";
-                detail = ex.Message;
+                catch (Exception ex)
+                {
+                    status = "error";
+                    detail = ex.Message;
+                }
             }
         }
 
@@ -893,42 +903,66 @@ namespace LiSUltrawidePatcher
             return null;
         }
 
-        /// <summary>How to run Python: uv, the system one, then our own copy.</summary>
-        private bool ResolveRunner(string script, List<string> argv,
-                                   out string exe, out string args)
+        /// <summary>One way of running patcher.py, in preference order.</summary>
+        private struct Runner
+        {
+            public string Exe, Args, Label;
+            public Runner(string exe, string args, string label)
+            {
+                Exe = exe; Args = args; Label = label;
+            }
+        }
+
+        /// <summary>Every way this machine can run the script, best first.</summary>
+        //
+        // uv is first because it brings its own interpreter and the compiled
+        // blake3 - but it needs the network to do so, so a machine that is
+        // offline, or behind a proxy, gets nothing from it. That is why this
+        // returns a LIST: Run() falls through to the next entry when a runner
+        // fails before the patcher itself ever printed anything.
+        private List<Runner> Runners(string script, List<string> argv, bool allowUv)
         {
             StringBuilder tail = new StringBuilder();
             tail.Append('"').Append(script).Append('"');
             foreach (string a in argv) tail.Append(' ').Append(a);
 
-            string uv = FindUv();
+            List<Runner> list = new List<Runner>();
+            string uv = allowUv ? FindUv() : null;
             if (uv != null)
-            {
-                exe = uv;
-                args = "run --quiet --script " + tail;
-                return true;
-            }
-            if (Which("py") != null)
-            {
-                exe = "py";
-                args = "-3 " + tail;
-                return true;
-            }
-            if (Which("python") != null)
-            {
-                exe = "python";
-                args = tail.ToString();
-                return true;
-            }
+                list.Add(new Runner(uv, "run --quiet --script " + tail, "uv"));
+            string py = Which("py");
+            if (py != null) list.Add(new Runner(py, "-3 " + tail, "the Python launcher"));
+            string python = Which("python");
+            if (python != null) list.Add(new Runner(python, tail.ToString(), "Python"));
             string embedded = EmbeddedPython();
             if (embedded != null)
-            {
-                exe = embedded;
-                args = tail.ToString();
-                return true;
-            }
-            exe = args = null;
-            return false;
+                list.Add(new Runner(embedded, tail.ToString(), "the private Python"));
+            return list;
+        }
+
+        /// <summary>Start settings shared by every way of running the script.</summary>
+        //
+        // The encodings matter: without them the child writes in the machine's
+        // ANSI code page while this process reads the OEM one, so a game path
+        // with a non-ASCII character in it arrives as mojibake - and Python
+        // raises UnicodeEncodeError rather than printing it at all. UTF-8 on
+        // both sides is the only pair that agrees on every Windows.
+        // Both streams are always redirected: .NET refuses to start a process
+        // that carries an encoding for a stream it is not capturing, so setting
+        // one without the other throws instead of running anything.
+        private static ProcessStartInfo Launch(Runner r, string script)
+        {
+            ProcessStartInfo psi = new ProcessStartInfo(r.Exe, r.Args);
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.StandardOutputEncoding = new UTF8Encoding(false);
+            psi.StandardErrorEncoding = new UTF8Encoding(false);
+            psi.EnvironmentVariables["PYTHONUTF8"] = "1";
+            psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            psi.WorkingDirectory = Path.GetDirectoryName(script);
+            return psi;
         }
 
         private static string Which(string name)
@@ -943,12 +977,30 @@ namespace LiSUltrawidePatcher
                     try
                     {
                         string f = Path.Combine(dir.Trim('"'), name + ext);
-                        if (File.Exists(f)) return f;
+                        if (File.Exists(f) && !IsStoreAlias(f)) return f;
                     }
                     catch { }
                 }
             }
             return null;
+        }
+
+        /// <summary>Is this the Microsoft Store's python.exe placeholder?</summary>
+        //
+        // Windows ships zero-byte "app execution aliases" in WindowsApps, and
+        // python.exe is one of them on a machine that has never installed
+        // Python. It is a real file, so File.Exists says yes; running it opens
+        // the Store and exits without doing anything. Taking it for an
+        // interpreter is exactly how a clean PC ends up unable to install.
+        private static bool IsStoreAlias(string file)
+        {
+            if (file.IndexOf("\\WindowsApps\\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            try
+            {
+                return new FileInfo(file).Length == 0;
+            }
+            catch { return false; }
         }
 
         private string ScriptPath()
@@ -968,8 +1020,8 @@ namespace LiSUltrawidePatcher
                                 MessageBoxIcon.Error);
                 return;
             }
-            string exe, args;
-            if (!ResolveRunner(script, argv, out exe, out args))
+            List<Runner> runners = Runners(script, argv, true);
+            if (runners.Count == 0)
             {
                 txtLog.Clear();
                 if (FetchEmbeddedPython() == null)
@@ -982,41 +1034,72 @@ namespace LiSUltrawidePatcher
                         "No Python", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-                ResolveRunner(script, argv, out exe, out args);
+                runners = Runners(script, argv, true);
+                if (runners.Count == 0) return;
             }
 
             btnInstall.Enabled = btnRestore.Enabled = false;
             txtLog.Clear();
-            Log("> " + exe + " " + args);
+            RunWith(runners, 0, script, argv);
+        }
+
+        /// <summary>Anything the patcher prints starts with this banner.</summary>
+        private const string BannerMark = "Ultrawide Fix v";
+
+        // The one thing this program must never do is decide on its own to run
+        // an install twice. Falling through to the next runner is safe only
+        // because the banner above is the patcher's first line: no banner means
+        // the interpreter never got as far as the script, so nothing was
+        // written and re-running from scratch cannot stack anything.
+        private void RunWith(List<Runner> runners, int index, string script,
+                             List<string> argv)
+        {
+            Runner r = runners[index];
+            Log("> " + r.Exe + " " + r.Args);
             Log("");
 
-            ProcessStartInfo psi = new ProcessStartInfo(exe, args);
-            psi.UseShellExecute = false;
-            psi.CreateNoWindow = true;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            psi.WorkingDirectory = Path.GetDirectoryName(script);
+            ProcessStartInfo psi = Launch(r, script);
 
+            bool started = false;         // did the patcher itself ever speak?
+            bool denied = false;          // ...and was it a permissions refusal?
             Process proc = new Process();
             proc.StartInfo = psi;
             proc.EnableRaisingEvents = true;
-            proc.OutputDataReceived += delegate(object s, DataReceivedEventArgs e)
+            DataReceivedEventHandler onLine = delegate(object s, DataReceivedEventArgs e)
             {
-                if (e.Data != null) Log(e.Data);
+                if (e.Data == null) return;
+                if (e.Data.IndexOf(BannerMark, StringComparison.Ordinal) >= 0)
+                    started = true;
+                // both patcher.py and the UI-layout step end that advice this
+                // way ("run this installer as administrator" / "run the
+                // installer as administrator")
+                if (e.Data.IndexOf("as administrator",
+                                   StringComparison.OrdinalIgnoreCase) >= 0)
+                    denied = true;
+                Log(e.Data);
             };
-            proc.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e)
-            {
-                if (e.Data != null) Log(e.Data);
-            };
+            proc.OutputDataReceived += onLine;
+            proc.ErrorDataReceived += onLine;
             proc.Exited += delegate
             {
-                Log("");
-                Log(proc.ExitCode == 0 ? "Finished." : "Failed (exit code " + proc.ExitCode + ").");
+                int code = proc.ExitCode;
                 BeginInvoke((MethodInvoker)delegate
                 {
+                    if (code != 0 && !started && index + 1 < runners.Count)
+                    {
+                        Log("");
+                        Log(r.Label + " could not start the patcher (exit code "
+                            + code + ") - trying " + runners[index + 1].Label + ".");
+                        Log("");
+                        RunWith(runners, index + 1, script, argv);
+                        return;
+                    }
+                    Log("");
+                    Log(code == 0 ? "Finished." : "Failed (exit code " + code + ").");
                     btnInstall.Enabled = btnRestore.Enabled = true;
                     uvCheckAllowed = true;     // whatever runs the patcher is primed now
                     StartExeCheck();           // the executable just changed
+                    if (code != 0 && denied) OfferElevation(r, script);
                 });
             };
             try
@@ -1027,9 +1110,96 @@ namespace LiSUltrawidePatcher
             }
             catch (Exception ex)
             {
-                Log("Could not start " + exe + ": " + ex.Message);
+                Log("Could not start " + r.Exe + ": " + ex.Message);
+                if (index + 1 < runners.Count)
+                {
+                    Log("Trying " + runners[index + 1].Label + ".");
+                    Log("");
+                    RunWith(runners, index + 1, script, argv);
+                    return;
+                }
                 btnInstall.Enabled = btnRestore.Enabled = true;
             }
+        }
+
+        // A game under Program Files - Steam's default - cannot be written by an
+        // ordinary process, and "right-click, Run as administrator" is not
+        // something this program can assume anyone knows. So it offers, and
+        // repeats the exact same command with the elevation prompt attached.
+        private void OfferElevation(Runner r, string script)
+        {
+            if (MessageBox.Show(
+                    "Windows refused permission to write the game files.\r\n\r\n"
+                    + "This happens when the game is installed under Program "
+                    + "Files. Run the same install again as administrator?",
+                    "Administrator rights needed", MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            RunElevated(r, script);
+        }
+
+        /// <summary>The same command, elevated, with its output in a file.</summary>
+        //
+        // An elevated child cannot have its pipes redirected (that needs
+        // UseShellExecute = false, which in turn cannot request elevation), so
+        // it is run through cmd with its output sent to a temporary file, which
+        // is poured into the log when it finishes.
+        private void RunElevated(Runner r, string script)
+        {
+            string log = Path.Combine(Path.GetTempPath(), "lisde-elevated.log");
+            try { if (File.Exists(log)) File.Delete(log); }
+            catch { }
+
+            string command = "set PYTHONUTF8=1&& set PYTHONIOENCODING=utf-8&& "
+                             + "\"" + r.Exe + "\" " + r.Args
+                             + " > \"" + log + "\" 2>&1";
+            ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c \"" + command + "\"");
+            psi.UseShellExecute = true;          // required for the elevation verb
+            psi.Verb = "runas";
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.WorkingDirectory = Path.GetDirectoryName(script);
+
+            btnInstall.Enabled = btnRestore.Enabled = false;
+            Log("");
+            Log("Running as administrator - the output appears when it finishes.");
+            Process proc;
+            try
+            {
+                proc = Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                // 1223 is the user dismissing the UAC prompt: not an error
+                Log(ex is System.ComponentModel.Win32Exception
+                    && ((System.ComponentModel.Win32Exception)ex).NativeErrorCode == 1223
+                    ? "Cancelled - nothing was changed."
+                    : "Could not start it as administrator: " + ex.Message);
+                btnInstall.Enabled = btnRestore.Enabled = true;
+                return;
+            }
+            proc.EnableRaisingEvents = true;
+            proc.Exited += delegate
+            {
+                int code = proc.ExitCode;
+                string text = "";
+                try
+                {
+                    if (File.Exists(log))
+                        text = File.ReadAllText(log, new UTF8Encoding(false));
+                }
+                catch (Exception ex) { text = "(could not read the output: " + ex.Message + ")"; }
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    foreach (string line in text.Replace("\r\n", "\n").Split('\n'))
+                        if (line.Length > 0) Log(line);
+                    Log("");
+                    Log(code == 0 ? "Finished." : "Failed (exit code " + code + ").");
+                    btnInstall.Enabled = btnRestore.Enabled = true;
+                    StartExeCheck();
+                    try { if (File.Exists(log)) File.Delete(log); }
+                    catch { }
+                });
+            };
         }
 
         private bool CommonArgs(List<string> argv)

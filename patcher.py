@@ -1638,8 +1638,26 @@ def run():
                 do_sharpen, fetch_oodle_ok=not args.no_fetch_oodle)
 
 
+def survive_odd_characters():
+    """Never let an unprintable character in a path end the install.
+
+    Windows gives stdout the machine's ANSI code page, which cannot represent
+    every path it will happily hand out - a game folder or a user name in a
+    script the local code page does not cover raises UnicodeEncodeError from
+    an ordinary print(), halfway through the work. The encoding stays as the
+    environment set it (the GUI sets UTF-8 on both ends); only the reaction to
+    a character it cannot spell changes, from raising to showing an escape.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except Exception:              # Python 3.6, or a stream without it
+            pass
+
+
 def main():
     """Expected problems get one line; anything else keeps its traceback."""
+    survive_odd_characters()
     try:
         run()
     except InstallError as ex:

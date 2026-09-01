@@ -393,6 +393,14 @@ def main():
 
 def cli():
     """Expected problems get one line; anything else keeps its traceback."""
+    # A path the machine's code page cannot spell must not turn an ordinary
+    # print() into UnicodeEncodeError halfway through the patch; see the same
+    # guard in patcher.py, which is what usually runs this.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='backslashreplace')
+        except Exception:
+            pass
     try:
         main()
     except PatchError as ex:
