@@ -24,7 +24,7 @@ None of that is something you have to take on trust. The exe in each release is 
 
 ### Method 2: Command line
 
-> **Tested on Windows only.** The installer is written to work on SteamOS and the Steam Deck, on Linux under Proton, and on macOS: the game search knows those install layouts, and `Engine.ini` is looked up inside a Proton prefix. None of that has been run on real hardware, though. If you are on one of those systems and something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) - or send a pull request, it is a small installer and the platform-specific parts are all in `patcher.py`.
+> **Tested on Windows only.** The installer is written to work on SteamOS and the Steam Deck, and on Linux under Proton (Bazzite, CachyOS, Omarchy, or any distribution with native, Flatpak or Snap Steam): the game search knows those install layouts, `Engine.ini` is looked up inside the game's Proton prefix, and the path logic is exercised on Linux in CI. None of that has been run on real hardware, though. If you are on one of those systems and something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) - or send a pull request, it is a small installer and the platform-specific parts are all in `patcher.py`.
 
 #### Optional: install uv
 
@@ -54,6 +54,8 @@ or, under uv:
 uv run patcher.py
 ```
 
+On Linux and the Steam Deck the command is `python3 patcher.py` (the `python` name is not present on every distribution). Steam Deck: switch to **Desktop Mode** (power menu), open **Konsole**, `cd` into the unpacked download, and run it there. `LiSUltrawidePatcher.exe` is the Windows front-end and is not needed - the command line is the same installer. Start the game once before installing, so that Steam has created the Proton prefix that holds `Engine.ini`.
+
 Run with no arguments for an interactive install, or drive it directly:
 
 ```bash
@@ -62,7 +64,7 @@ python patcher.py --width 5120 --height 2160 --yes
 python patcher.py --restore
 ```
 
-The game is located automatically ([how](RESEARCH.md#8a-where-the-installer-looks-for-the-game)), so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match.
+The game is located automatically ([how](RESEARCH.md#8a-where-the-installer-looks-for-the-game)), so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match. If the game runs in a prefix Steam does not manage (Heroic, Lutris, plain Wine), pass `--engine-ini` with the path to `.../drive_c/users/<user>/AppData/Local/Chronos/Saved/Config/Windows/Engine.ini` inside that prefix.
 
 **Requirements:** Python 3.6+ and nothing else - the standard library covers everything, and nothing is downloaded. The full-width UI step reads the game's Oodle-compressed packages with a pure-Python Kraken decoder that ships in `tools/assetdump/` ([how](RESEARCH.md#9e-reading-oodle-compressed-packages)), and it hashes with the compiled `blake3` module when that happens to be installed, falling back to a bundled pure-Python BLAKE3 otherwise.
 
@@ -147,7 +149,7 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 - **The UI is still 16:9 in game:** check that `Chronos/Content/Paks/Mods/LiSUltrawideUI_P.utoc`, `.ucas` and `.pak` are all present - the three belong together. If they are and nothing changed, say so in an issue with your resolution; the container is only mounted if the game scans that folder, and that is the one thing this fix cannot check from outside the game.
 - **Everything looks wrong after a game update:** re-run the installer. It re-takes its backups from the updated game, and all code sites are located by unique byte signatures, so it either patches the new build or tells you in one line that this build needs a new version of the fix.
 - **"The system refused permission to write the game files":** the game is installed somewhere only an administrator may write to, usually under Program Files. The GUI offers to run the same install again as administrator - say yes to the Windows prompt. On the command line, start the terminal as administrator and re-run `python patcher.py`.
-- **"Could not locate Engine.ini" on Linux or the Steam Deck:** the game has not been started yet, so its Proton prefix does not exist. Start the game once, quit, and run the installer again - the other parts of the fix were installed and stay installed.
+- **"Could not locate Engine.ini" on Linux or the Steam Deck:** the game has not been started yet, so its Proton prefix does not exist. Start the game once, quit, and run the installer again - the other parts of the fix were installed and stay installed. For a copy that runs outside Steam, pass `--engine-ini` (see [Method 2](#method-2-command-line)).
 - **Windows or your antivirus blocked the installer:** the program is unsigned, so SmartScreen needs **More info -> Run anyway**. If an antivirus quarantined it, restore the file and exclude the folder, or leave the exe alone and run `python patcher.py` instead ([Method 2](#method-2-command-line)) - the two are the same installer.
 - **The installer cannot find the game:** point it at the executable yourself - **Browse** in the GUI, or `python patcher.py --exe "D:\...\Chronos\Binaries\Win64\Chronos-Win64-Shipping.exe"`. `python patcher.py --find-exe` shows what the search does find.
 - **Restore stock:** the GUI's **Restore original** button, or `python patcher.py --restore`.
