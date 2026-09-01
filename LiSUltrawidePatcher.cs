@@ -102,7 +102,7 @@ namespace LiSUltrawidePatcher
         private ComboBox cmbPresets;
         private CheckBox chkExe, chkGameFiles, chkChromatic, chkSharpen;
         private Button btnBrowse, btnInstall, btnRestore;
-        private Label lblCustom, lblX, lblExeStatus;
+        private Label lblCustom, lblX, lblExeStatus, lblFilesStatus;
         private ToolTip tips;
         private System.Windows.Forms.Timer checkTimer;
 
@@ -211,6 +211,17 @@ namespace LiSUltrawidePatcher
             lblExeStatus.ForeColor = SystemColors.GrayText;
             lblExeStatus.Margin = new Padding(2, 2, 0, 0);
             root.Controls.Add(lblExeStatus);
+
+            // The second line is about the game's data rather than the exe: it
+            // is the only way a user learns that a game update has left the
+            // installed UI container behind, since nothing of ours runs at
+            // launch to tell them.
+            lblFilesStatus = new Label();
+            lblFilesStatus.AutoSize = true;
+            lblFilesStatus.MaximumSize = new Size(ContentWidth, 0);
+            lblFilesStatus.ForeColor = SystemColors.GrayText;
+            lblFilesStatus.Margin = new Padding(2, 0, 0, 0);
+            root.Controls.Add(lblFilesStatus);
 
             // --- resolution
             root.Controls.Add(Header("Display resolution"));
@@ -631,6 +642,14 @@ namespace LiSUltrawidePatcher
             tips.SetToolTip(lblExeStatus, tip ?? text);
         }
 
+        private void SetFilesStatus(string glyph, Color color, string text, string tip)
+        {
+            lblFilesStatus.ForeColor = color;
+            lblFilesStatus.Text = text.Length == 0
+                ? "" : (glyph.Length > 0 ? glyph + "  " : "") + text;
+            tips.SetToolTip(lblFilesStatus, tip ?? text);
+        }
+
         private void OnExePathChanged(object sender, EventArgs e)
         {
             tips.SetToolTip(txtExePath, txtExePath.Text.Trim());
@@ -653,30 +672,63 @@ namespace LiSUltrawidePatcher
             if (path.Length == 0)
             {
                 SetExeStatus("", SystemColors.GrayText, "No executable selected.", null);
+                SetFilesStatus("", SystemColors.GrayText, "", null);
                 return;
             }
             if (!File.Exists(path))
             {
                 SetExeStatus(GlyphWarn, WarnColor, "There is no file at that path.", path);
+                SetFilesStatus("", SystemColors.GrayText, "", null);
                 return;
             }
             SetExeStatus("", SystemColors.GrayText,
                          "Checking " + Path.GetFileName(path) + "...", path);
+            SetFilesStatus("", SystemColors.GrayText, "", null);
 
             ThreadPool.QueueUserWorkItem(delegate
             {
-                string status, detail;
-                RunCheck(path, out status, out detail);
+                string status, detail, files, filesDetail;
+                RunCheck(path, out status, out detail, out files, out filesDetail);
                 if (token != checkToken) return;             // superseded
                 try
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
-                        if (token == checkToken) ApplyStatus(status, detail);
+                        if (token != checkToken) return;
+                        ApplyStatus(status, detail);
+                        ApplyFilesStatus(files, filesDetail);
                     });
                 }
                 catch { }                                    // form already gone
             });
+        }
+
+        /// <summary>The full-width UI container: is it there, and is it current?</summary>
+        private void ApplyFilesStatus(string status, string detail)
+        {
+            switch (status)
+            {
+                case "current":
+                    SetFilesStatus(GlyphOk, OkColor, "Full-width UI " + detail + ".", detail);
+                    break;
+                case "stale":
+                    SetFilesStatus(GlyphWarn, WarnColor,
+                                   "Full-width UI was built for a different build of the "
+                                   + "game - Install again before playing.", detail);
+                    break;
+                case "unrecorded":
+                case "incomplete":
+                    SetFilesStatus(GlyphWarn, WarnColor,
+                                   "Full-width UI needs installing again.", detail);
+                    break;
+                case "none":
+                    SetFilesStatus("", SystemColors.GrayText,
+                                   "Full-width UI is not installed.", detail);
+                    break;
+                default:
+                    SetFilesStatus("", SystemColors.GrayText, "", detail);
+                    break;
+            }
         }
 
         private void ApplyStatus(string status, string detail)
@@ -717,10 +769,13 @@ namespace LiSUltrawidePatcher
         }
 
         /// <summary>patcher.py --check-exe, out of sight; never prompts.</summary>
-        private void RunCheck(string path, out string status, out string detail)
+        private void RunCheck(string path, out string status, out string detail,
+                              out string files, out string filesDetail)
         {
             status = "error";
             detail = null;
+            files = "error";
+            filesDetail = null;
             string script = ScriptPath();
             if (script == null) { status = "noscript"; return; }
 
@@ -762,6 +817,9 @@ namespace LiSUltrawidePatcher
                                 answered = true;
                             }
                             else if (t.StartsWith("detail: ")) detail = t.Substring(8).Trim();
+                            else if (t.StartsWith("files: ")) files = t.Substring(7).Trim();
+                            else if (t.StartsWith("filesdetail: "))
+                                filesDetail = t.Substring(13).Trim();
                         }
                         if (answered) return;
                     }

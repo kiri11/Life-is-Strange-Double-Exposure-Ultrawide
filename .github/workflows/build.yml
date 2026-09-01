@@ -86,6 +86,7 @@ jobs:
           )
           $assetdump = @(
             'patch_ui_layout.py',        # entry point patcher.py invokes
+            'container.py',              # writes the mod container it installs
             'iostore.py', 'zen.py', 'slots.py', 'unver.py',  # container readers
             'oodle.py',                  # loads the decompressor patcher.py fetches
             'blake3_pure.py',            # stdlib BLAKE3, so no wheel is required

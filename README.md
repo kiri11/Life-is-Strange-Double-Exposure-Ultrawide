@@ -78,22 +78,33 @@ Before anything is written, the installer classifies the executable using the sa
 
 The GUI shows this as a coloured line under the path (green tick / orange warning, full detail on hover) and refreshes it after every install or restore; on the command line it is one `Executable:` line, or `--check-exe` on its own. Because the check reads the same signature table the patcher writes with, the badge cannot disagree with what **Install** would do.
 
+A second line reports the full-width UI. Its container is built from ten of the game's own UI packages, so it belongs to the build it was made on, and the installer records a fingerprint of the game's data next to it:
+
+| Verdict | Meaning |
+| :--- | :--- |
+| **Installed for 5120x2160** | Current - built from the game as it is on disk. |
+| **Built for a different build of the game** | The game has been updated since. Install again *before playing*: the container still shadows ten packages with copies cooked for a build that is gone. |
+| **Needs installing again** | Files are missing from the set, or nothing records what they were built from. |
+| **Not installed** | The step was never run, or was restored. |
+
+The check reads a megabyte of the game's data and nothing else - no Oodle, no container parsing - so it also answers on a machine where the step itself would be skipped.
+
 ### What each option does
 
 | Option | Effect | Touches |
 | :--- | :--- | :--- |
 | **Ultrawide camera** | Hor+ cutscenes, dialogue and exploration; no bars, no zoom on hand-off | `Chronos-Win64-Shipping.exe` |
-| **Full-width UI** | Loading screens cover the screen; HUD on the real edge | `pakchunk0-Windows.utoc` / `.ucas` |
+| **Full-width UI** | Loading screens cover the screen; HUD on the real edge | adds `Content/Paks/Mods/LiSUltrawideUI_P.*` |
 | **Disable chromatic aberration** | Removes colour fringing, most visible at the widened edges | `Engine.ini` |
 | **Reduce blurriness** | Recommended TSR settings for your resolution | `Engine.ini` |
 
 The first three are enabled by default and each can be turned off (`--no-exe`, `--no-game-files`, `--no-chromatic-fix`); **Reduce blurriness** is opt-in (`--sharpen`).
 
-Every part creates a backup before writing: `.exe.original`, `.utoc.original`, and a clearly marked, individually removable block in `Engine.ini`. Re-running never stacks changes - each run starts from the pristine state.
+The parts that write to existing files back them up first: `.exe.original`, and a clearly marked, individually removable block in `Engine.ini`. The full-width UI needs no backup at all - it is delivered as its own small mod container (~120 KB) alongside the game's data, and the game's own files are only ever read. Re-running never stacks changes - each run starts from the pristine state.
 
 A backup belongs to the version of the game it was taken from, and the installer checks that before it trusts one. When a game update replaces the files underneath it, the old backup is set aside (renamed `.old`, never deleted) and a fresh one taken from the updated game - so re-running after an update installs onto the new version instead of writing the previous one back over it. If a backup is missing and the game is already patched, the installer stops and says so rather than guessing.
 
-> Do not run Steam's **Verify Integrity of Game Files** while the full-width UI patch is applied - it would re-download the ~20 GB `pakchunk0`. A game update also overwrites it; just re-run the installer afterwards, which is safe: it notices the game changed and re-takes its backups.
+> After a game update, re-run the installer. The mod container holds copies of ten UI packages taken from the build it was made on, and an update can change them; re-running rebuilds it from the updated game. Steam's **Verify Integrity of Game Files** is safe to run - it has nothing of ours to repair, since no shipped file is modified.
 
 ---
 
@@ -104,7 +115,7 @@ A backup belongs to the version of the game it was taken from, and the installer
 - **Correct photo mechanics.** Max's Polaroids and the in-game camera keep proper proportions without stretching or skewing, and the photo pipeline is left bit-identical to vanilla.
 - **Full-width UI (optional).** Loading screens cover the whole screen instead of leaving the still-streaming world visible at the sides, and HUD elements such as phone notifications sit on the physical screen edge rather than an invisible 16:9 boundary.
 - **Display tweaks (optional).** Disable chromatic aberration, and apply recommended anti-blur TSR settings for your resolution.
-- **Fully static.** A handful of patched bytes in the executable plus an in-place edit of the game's data. No runtime hooks, no DLL injection, no Lua mods, no background processes, no performance impact. Behaviour-neutral on a 16:9 display.
+- **Fully static.** A handful of patched bytes in the executable plus a small mod container next to the game's data. No runtime hooks, no DLL injection, no Lua mods, no background processes, no performance impact. Behaviour-neutral on a 16:9 display.
 
 Everything is reversible with a single **Restore** action.
 
@@ -131,7 +142,9 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 ## Troubleshooting
 
 - **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
-- **The full-width UI step was skipped:** it needs an Oodle decompressor, which is downloaded automatically unless you passed `--no-fetch-oodle`. If the download failed, drop any `oo2core_*_win64.dll` from another Unreal Engine game into `tools/assetdump/` and re-run.
+- **The full-width UI step was skipped:** it needs an Oodle decompressor to read the game's packages, which is downloaded automatically unless you passed `--no-fetch-oodle`. If the download failed, drop any `oo2core_*_win64.dll` from another Unreal Engine game into `tools/assetdump/` and re-run.
+- **The UI is still 16:9 after a game update:** the installer's second status line will say the container was built for a different build. Run **Install** again.
+- **The UI is still 16:9 in game:** check that `Chronos/Content/Paks/Mods/LiSUltrawideUI_P.utoc`, `.ucas` and `.pak` are all present - the three belong together. If they are and nothing changed, say so in an issue with your resolution; the container is only mounted if the game scans that folder, and that is the one thing this fix cannot check from outside the game.
 - **Everything looks wrong after a game update:** re-run the installer. It re-takes its backups from the updated game, and all code sites are located by unique byte signatures, so it either patches the new build or tells you in one line that this build needs a new version of the fix.
 - **"Windows refused permission to write the game files":** the game is installed somewhere only an administrator may write to, usually under Program Files. The GUI offers to run the same install again as administrator - say yes to the Windows prompt. On the command line, start the terminal as administrator and re-run `python patcher.py`.
 - **Windows or your antivirus blocked the installer:** the program is unsigned, so SmartScreen needs **More info -> Run anyway**. If an antivirus quarantined it, restore the file and exclude the folder, or leave the exe alone and run `python patcher.py` instead ([Method 2](#method-2-command-line)) - the two are the same installer.

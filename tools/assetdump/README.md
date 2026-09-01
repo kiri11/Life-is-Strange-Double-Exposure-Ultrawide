@@ -1,7 +1,12 @@
 # Asset dump toolchain
 
-Read-only inspection of *Life is Strange: Double Exposure* game data. Pure Python 3
-plus one native DLL for Oodle decompression. No FModel / retoc / UAssetGUI required.
+Inspection of *Life is Strange: Double Exposure* game data, and the writer that
+publishes the full-width UI fix as a mod container. Pure Python 3 plus one native
+DLL for Oodle decompression. No FModel / retoc / UAssetGUI required.
+
+The game's own files are only ever read: the fix writes a container of its own into
+`Content/Paks/Mods/`, which the engine mounts after `pakchunk0` and which therefore
+shadows the packages in it.
 
 The game's containers are **not encrypted** (`ContainerFlags=0x09` = Compressed|Indexed,
 null `EncryptionKeyGuid`, plaintext directory index). Oodle is the only real gate.
@@ -29,12 +34,15 @@ one elsewhere), then `oodle-data-shared.dll` / `oo2core_*_win64.dll` in this fol
 | `zen.py`     | Zen package parser: name batch, import/export maps, export-bundle data layout |
 | `unver.py`   | Unversioned-property header decoder (fragments + zero mask) |
 | `slots.py`   | `UCanvasPanelSlot` decoder - prints anchors/offsets/alignment per widget |
+| `container.py` | `.utoc`/`.ucas`/`.pak` **writer**: TOC perfect hash, `FIoContainerHeader`, directory index, stub pak (RESEARCH.md 12) |
+| `patch_ui_layout.py` | the fix itself: edits the UI slots and publishes the result as a mod container |
 
 ## Usage
 
     cd <game>/Chronos/Content/Paks
     python .../slots.py BP_LoadingWindow BP_NotificationWindow BP_PauseWindow
     python .../zen.py pakchunk0-Windows.utoc BP_LoadingWindow      # export map
+    python .../container.py pakchunk0-Windows.utoc                 # check a container
 
 ## Notes / gotchas
 
@@ -47,6 +55,11 @@ one elsewhere), then `oodle-data-shared.dll` / `oo2core_*_win64.dll` in this fol
 - Object references inside export payloads are 4-byte 1-based `FPackageIndex`
   values, not the 8-byte `FPackageObjectIndex` used in the import/export maps.
 - Each export's serialized data ends with 4 trailing zero bytes.
+- A container's perfect hash is FNV-**1** (multiply, then xor), 64-bit, over the
+  12 chunk-id bytes, and the modulo is taken on the full 64-bit value - truncating
+  to `uint32` first resolves most chunks and quietly misses a few.
+- In `FFilePackageStoreEntry`, an array view's offset is measured from the view
+  itself, not from the end of its `{count, offset}` pair.
 - Property *values* decode without a `.usmap` only because the schemas above are
   hardcoded. Anything beyond these structs needs a real mappings file
   (UE4SS `dumpusmap` or Dumper-7).

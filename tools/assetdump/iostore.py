@@ -32,8 +32,8 @@ class Toc:
         (self.hdrsize, self.entries, self.cblocks, self.cbsize, self.cmcount,
          self.cmlen, self.blocksize, self.diridxsize, self.partitions) = struct.unpack_from('<9I', h, 0x14)
         self.flags = h[0x50]
-        seeds = struct.unpack_from('<I', h, 0x54)[0]
-        nohash = struct.unpack_from('<I', h, 0x60)[0]
+        seeds = self.seeds_count = struct.unpack_from('<I', h, 0x54)[0]
+        nohash = self.unhashed_count = struct.unpack_from('<I', h, 0x60)[0]
         self.chunkids = f.read(self.entries*12)
         self.offlen  = f.read(self.entries*10)
         f.seek(f.tell() + seeds*4 + nohash*4)

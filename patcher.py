@@ -782,10 +782,11 @@ def patch_photo_table(data, target_bytes):
 # Backups, and the build they belong to
 # ---------------------------------------------------------------------------
 # A backup is only a backup of the game you have right now. Steam replaces the
-# executable and the containers on every game update, and writing the previous
-# build's files back over the new ones would quietly downgrade the game - or,
-# for the 20 GB container, wreck it. So before anything is restored from a
-# backup, the backup is checked against the build that is actually installed.
+# executable on every game update, and writing the previous build's file back
+# over the new one would quietly downgrade the game. So before anything is
+# restored from a backup, the backup is checked against the build that is
+# actually installed. (The full-width UI has no backup to check: it adds a mod
+# container next to the game's data and never edits a shipped file.)
 #
 # The executable needs no bookkeeping for this: the fix only ever rewrites bytes
 # in place, so a stock executable and that same executable after the fix has run
@@ -1394,12 +1395,57 @@ def paks_dir_for(exe_path):
     return os.path.join(chronos, "Content", "Paks")
 
 
-def apply_game_files(exe_path, width, height, restore=False, oodle_dll=None):
-    import subprocess
+def ui_script():
     here = os.path.dirname(os.path.abspath(__file__))
     script = os.path.join(here, "tools", "assetdump", "patch_ui_layout.py")
-    if not os.path.isfile(script):
-        print("  !! {} not found - skipping".format(script))
+    return script if os.path.isfile(script) else None
+
+
+def check_game_files(exe_path):
+    """Is the installed mod container still the one this game needs?
+
+    -> (status, one-line detail), from `patch_ui_layout.py --verify`. Answering
+    here rather than in this file keeps one description of what is installed,
+    and the check itself reads a megabyte of the game's data - no Oodle, no
+    container parsing, nothing that could prompt or download.
+
+    The one that matters is `stale`: a game update replaces the packages the
+    container was built from, and unlike the old in-place patch - which an
+    update simply overwrote - a container left behind keeps shadowing them with
+    copies cooked for a build that is gone.
+    """
+    import subprocess
+    script = ui_script()
+    if script is None:
+        return "noscript", "not checked - patch_ui_layout.py is not next to this program"
+    paks = paks_dir_for(exe_path)
+    if not os.path.isdir(paks):
+        return "nopaks", "not checked - no {} next to that executable".format(
+            os.path.basename(paks))
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        proc = subprocess.Popen([sys.executable, script, "--paks", paks, "--verify"],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                env=env)
+        out, _ = proc.communicate()
+    except Exception as ex:
+        return "error", "not checked ({})".format(ex)
+    status, detail = "error", "not checked"
+    for line in out.decode("utf-8", "replace").splitlines():
+        if line.startswith("status: "):
+            status = line[8:].strip()
+        elif line.startswith("detail: "):
+            detail = line[8:].strip()
+    return status, detail
+
+
+def apply_game_files(exe_path, width, height, restore=False, oodle_dll=None):
+    import subprocess
+    script = ui_script()
+    if script is None:
+        print("  !! tools/assetdump/patch_ui_layout.py not found - skipping")
         return False
     cmd = [sys.executable, script, "--paks", paks_dir_for(exe_path)]
     cmd += ["--restore"] if restore else ["--width", str(width), "--height", str(height)]
@@ -1578,11 +1624,18 @@ def run():
         return
 
     status, detail = check_exe(exe_path)
+    files_status, files_detail = check_game_files(exe_path)
     if args.check_exe:                       # machine-readable, for the GUI
         print("status: {}".format(status))
         print("detail: {}".format(detail))
+        print("files: {}".format(files_status))
+        print("filesdetail: {}".format(files_detail))
         return
     print("Executable: {}".format(detail))
+    print("Full-width UI: {}".format(files_detail))
+    if files_status == "stale":
+        print("  !! the game has been updated since this was installed - "
+              "install again before playing.")
 
     # advanced escape hatch: executable only, explicit mode
     if args.mode:

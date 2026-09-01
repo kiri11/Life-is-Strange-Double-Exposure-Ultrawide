@@ -209,7 +209,7 @@ Field triangulation across gate variants established that the loading view is **
 
 The overlay widget is not the culprit either. `BP_LoadingWindow`'s `BlackScreen` image sits in a `CanvasPanelSlot` anchored `(0,0)-(1,1)` with offsets `(0,0,0,0)` - a full-viewport stretch - and `BP_TransitionWindow`'s `FullscreenImage` is identical. Both would cover an ultrawide viewport correctly. The 16:9 boxing is applied **upstream of the widgets**, at the UI host, and it hits every window - loading, main menu, pause, notifications - uniformly. One shared cause, not a per-asset defect.
 
-**Resolved by the full-width UI patch (section 9c):** `BP_UIWindowManager`'s `WindowParent` is a fixed 3840x2160 centred box that clips every window to 16:9. Widening it to `2160 * monitorAspect` makes the overlay cover the side strips by itself, and puts right-anchored HUD elements on the physical screen edge - both symptoms close together. It ships as an in-place container edit rather than an executable patch; section 11 records the executable-only alternative for anyone who would rather not touch the game's data files at all.
+**Resolved by the full-width UI patch (section 9c):** `BP_UIWindowManager`'s `WindowParent` is a fixed 3840x2160 centred box that clips every window to 16:9. Widening it to `2160 * monitorAspect` makes the overlay cover the side strips by itself, and puts right-anchored HUD elements on the physical screen edge - both symptoms close together. It ships as a mod container of our own rather than an executable patch; section 11 records the executable-only alternative for anyone who would rather not ship game data at all.
 
 ---
 
@@ -243,10 +243,10 @@ The overlay widget is not the culprit either. `BP_LoadingWindow`'s `BlackScreen`
 
 ## 8. Tools in This Package
 
-1. **`patcher.py`** - the installer and the single source of truth for everything this fix writes. Four independent parts, the first three on by default: the executable camera patch, the full-width UI container patch (delegated to `tools/assetdump/`), and two `Engine.ini` tweaks (chromatic aberration off, anti-blur TSR settings) written as one removable managed block. `--restore` undoes all of it byte-for-byte. Carries PEP 723 inline metadata, so `uv run patcher.py` needs no virtualenv and fetches `blake3` itself - though nothing requires it: the standard library alone is enough (see `blake3_pure.py` below). Signature-scan fallback for game updates; always patches from the pristine `.original` backup, so re-runs never stack. A backup is only trusted while it belongs to the installed build - the executable's is matched on size and PE header, the container's on a recorded fingerprint of the `.ucas` head - so a game update makes the installer set the old backup aside and re-take it rather than writing the previous build back over the new one.
+1. **`patcher.py`** - the installer and the single source of truth for everything this fix writes. Four independent parts, the first three on by default: the executable camera patch, the full-width UI mod container (delegated to `tools/assetdump/`), and two `Engine.ini` tweaks (chromatic aberration off, anti-blur TSR settings) written as one removable managed block. `--restore` undoes all of it byte-for-byte. Carries PEP 723 inline metadata, so `uv run patcher.py` needs no virtualenv and fetches `blake3` itself - though nothing requires it: the standard library alone is enough (see `blake3_pure.py` below). Signature-scan fallback for game updates; always patches from the pristine `.original` backup, so re-runs never stack. A backup is only trusted while it belongs to the installed build - the executable's is matched on size and PE header - so a game update makes the installer set the old backup aside and re-take it rather than writing the previous build back over the new one. The full-width UI needs no backup of its own: it adds files and never edits one.
    Advanced: `--mode` patches only the executable. `cine` is the shipped behaviour and `stock` restores it; the remaining modes are earlier designs kept as escape hatches for experiments, and section 6 explains what each of them gets wrong.
 2. **`LiSUltrawidePatcher.exe` (& `.cs`)** - Windows GUI (WinForms; buildable with the stock .NET Framework `csc.exe`, the exact command in the `.cs` header). Only the source is in the repository: `.github/workflows/build.yml` compiles the exe on every push to main and publishes it, so the binary a user downloads is always the one this source produces and cannot quietly drift from it - the failure mode an earlier committed exe made invisible. It also guarantees an interpreter: uv, then `py`, then `python`, and failing all three it downloads python.org's embeddable build (~11 MB zip, ~22 MB unpacked) into `tools/python/` (or `%LOCALAPPDATA%\LiSUltrawideFix\python` if that is not writable) and runs the patcher with that - no installer, no `PATH` change, removed with the fix. A **thin front-end only**: it finds the game (its own folder, then Steam libraries, Epic manifests and the usual game roots - the same order `find_exe()` uses), detects the display, shows the four options as checkboxes, and shells out to `patcher.py` (preferring `uv run`, then `py`, then `python`), streaming its output. The stock / already patched / unrecognised badge under the path is `patcher.py --check-exe` run in the background, so the verdict comes from the same signature table the patcher writes with. It contains no patch logic. An earlier version reimplemented the byte patches in C# and silently drifted out of sync - keeping one implementation is deliberate.
-3. **`tools/assetdump/`** - the IoStore/Zen container reader and the UI layout patcher (section 9), plus **`blake3_pure.py`**: BLAKE3 in the standard library alone, ~200x slower than the Rust extension and irrelevantly so, since a run hashes about a dozen widget packages of a few dozen KB. It exists so the full-width UI step cannot depend on installing a compiled wheel - verified against the spec's test vectors and differentially against the `blake3` module over random inputs (`python blake3_pure.py`).
+3. **`tools/assetdump/`** - the IoStore/Zen container reader, the container *writer* (`container.py`, section 12) and the UI layout patcher (section 9), plus **`blake3_pure.py`**: BLAKE3 in the standard library alone, ~200x slower than the Rust extension and irrelevantly so, since a run hashes about a dozen widget packages of a few dozen KB. It exists so the full-width UI step cannot depend on installing a compiled wheel - verified against the spec's test vectors and differentially against the `blake3` module over random inputs (`python blake3_pure.py`).
 4. **`tools/make_icon.py`** - regenerates `LiSUltrawidePatcher.ico` (7 sizes, 16-256 px) with no imaging dependencies: shapes are supersampled by hand and written as PNG-compressed ICO entries via `zlib` and `struct`.
 
 ### 8a. Where the Installer Looks for the Game
@@ -392,18 +392,20 @@ There is no exe-side equivalent - the value lives in cooked asset data, so this 
 
 ### 9c-3. Implementation - `tools/assetdump/patch_ui_layout.py`
 
-Delivered as an in-place container patch rather than a loose IoStore mod: writing a valid patch container means authoring an `FIoContainerHeader` with package store entries, whereas every edit needed here rewrites an *existing* float, so package sizes never change and the container can simply be repointed.
+Delivered as its own IoStore container in `Content/Paks/Mods/`, which the engine mounts after `pakchunk0` and which therefore shadows the ten packages it carries. The game's own files are only read, never written: Steam's Verify Integrity has nothing to repair, a game update cannot half-overwrite the fix, and `--restore` is three file deletions. The container is ~120 KB - the packages are copied verbatim apart from one float each - and it has to be generated on the user's machine either way, because the values written depend on the display (`2160 x aspect`).
 
 Method, per modified package:
 
-1. read and decompress the package chunk, decode the target `UCanvasPanelSlot` (located by the widget its `Content` points at, never by hardcoded offsets, so it survives game updates);
+1. read and decompress the package chunk out of `pakchunk0`, decode the target `UCanvasPanelSlot` (located by the widget its `Content` points at, never by hardcoded offsets, so it survives game updates);
 2. verify the current value matches the expected old value, and that the float occurs exactly once in the slot payload;
-3. write the new float, append the whole chunk to the end of the `.ucas` as a new **uncompressed** block (compression method index 0 is always valid);
-4. repoint that chunk's compression-block entry in the TOC (offset / size / method);
-5. recompute the chunk's meta hash - **BLAKE3 truncated to 20 bytes**, identified by reproducing a stock chunk's stored hash exactly;
-6. re-read every edited slot back through the container reader as a verification pass.
+3. write the new float into a copy of the chunk;
+4. carry the package's `FFilePackageStoreEntry` over from `pakchunk0`'s container header verbatim - export counts, imported package ids and shader map hashes are unchanged by a float edit, and the imports still resolve because they point at packages `pakchunk0` continues to serve;
+5. publish the copies as a new container (section 12), uncompressed, with its own container header, directory index and perfect hash;
+6. re-read every edited slot back through the container reader - out of the file the game will actually mount.
 
-Nothing existing is ever overwritten. `.utoc` is copied to `.utoc.original` and the original `.ucas` length is recorded, so `--restore` is exact and re-runs always start from the pristine container.
+An earlier release edited `pakchunk0` in place instead, appending the modified chunks to the 18 GB `.ucas` and repointing its TOC. That worked, but it made Verify Integrity a ~20 GB re-download and needed backup fingerprinting to survive game updates. `undo_in_place_patch()` removes it on upgrade, which also guarantees the packages read above come from a stock container.
+
+The one thing the move costs is what a game update now does. The in-place patch was simply overwritten by one - the fix vanished, harmlessly. A container is not: it keeps shadowing ten packages with copies cooked for a build that is gone, and cooked assets are tied to the build's global name map and script objects, so the failure is a broken UI rather than a missing feature. `container_state()` closes that by fingerprinting the game's `.ucas` when the container is built (size, and SHA-256 of the first megabyte) and comparing on every check; `patcher.py --check-exe` reports it as `files:` / `filesdetail:`, a plain run prints it under the executable line, and the GUI gives it a second badge. It reads a megabyte and needs no Oodle, so it answers even where the build step would be skipped. What it cannot do is fire at launch - nothing of this fix runs then, by design - so the warning lands the next time the installer is opened.
 
 The 15 edits, all derived from the design space rather than hardcoded:
 
@@ -423,7 +425,7 @@ The 15 edits, all derived from the design space rather than hardcoded:
 
 The main-menu and title screens are full-bleed compositions with no 3840 box to widen - their elements are inset from the box edges, so widening dragged them onto the physical screen edge. Re-inseting restores Deck Nine's authored framing; this is a deliberate choice to keep those two screens 16:9-composed rather than a limitation.
 
-**Field-verified at 5120x2160:** loading overlay covers the full width (side-peek gone), phone notifications sit on the physical right edge, pause title centred, main menu back to its authored 16:9 composition. The three full-stretch player-menu tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are *not* patched - boxing them the way their three siblings already are would need a structural edit (adding serialized properties, which changes package size). They are the known remaining gap in this pass.
+**Field-verified at 5120x2160**, both as an in-place edit and as the mod container: loading overlay covers the full width (side-peek gone), phone notifications sit on the physical right edge, pause title centred, main menu back to its authored 16:9 composition. The three full-stretch player-menu tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are *not* patched - see section 11, which the move to a container of our own now makes tractable.
 
 ### 9d. Binary Reference - UI Classes
 
@@ -507,7 +509,63 @@ Only the fourth attempt - measuring instead of inferring - produced the answer, 
 
 ## 11. Possible Improvements
 
-- **Player-menu tabs:** three full-stretch tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are not repositioned by the UI patch (section 9c). Giving them the centred box their three siblings already have needs a *structural* package edit - adding serialized properties changes the package size - which the in-place float patcher deliberately does not support.
+- **Player-menu tabs:** three full-stretch tabs (`JournalTabUI`, `SMSTabUI`, `CollectiblesTabUI`) are not repositioned by the UI patch (section 9c). Giving them the centred box their three siblings already have needs a *structural* package edit - adding serialized properties changes the package size. That was impossible while the fix repointed chunks inside `pakchunk0`; now that it writes a container of its own, package size is free and the only missing piece is a package serializer that can add properties and fix up the export offsets.
 - **Per-shot aspect variants:** if a specific cinematic ever appears pillarboxed, its camera is authored at an aspect outside cave A's gate window (section 2c); the gate can be extended per report.
-- **An executable-only route to the full-width UI (section 5):** the container edit could be replaced by a load-window flag in the executable - `UChronosLoadingWindow` is a *native* class, so its construction and destruction are an exact load signal rather than a heuristic, and `.data` alignment padding is already writable, so no new PE section is needed. One flag byte, two small caves, and cave A consulting the flag. It is more reverse-engineering than the container edit, and it is the option to take if shipping a game-data change ever becomes undesirable.
+- **An executable-only route to the full-width UI (section 5):** the mod container could be replaced by a load-window flag in the executable - `UChronosLoadingWindow` is a *native* class, so its construction and destruction are an exact load signal rather than a heuristic, and `.data` alignment padding is already writable, so no new PE section is needed. One flag byte, two small caves, and cave A consulting the flag. It is more reverse-engineering than the container edit, and it is the option to take if shipping a game-data change ever becomes undesirable.
 
+
+---
+
+## 12. Writing an IoStore Container - `tools/assetdump/container.py`
+
+Shipping the UI fix as its own container (section 9c-3) means writing `.utoc` / `.ucas` / `.pak` that the engine accepts. Two parts of the format are not documented anywhere useful and were recovered from the shipped files instead. Both were then checked by rebuilding real data byte for byte, which is a much stronger test than "the game did not crash".
+
+### 12a. The TOC's Perfect Hash
+
+`FIoStoreTocHeader` carries a seed table (`TocChunkPerfectHashSeedsCount`, half the entry count) that turns a 12-byte `FIoChunkId` into an entry index without a search. The construction it implies:
+
+```
+hash(seed, id) = FNV-1, 64-bit, over the 12 bytes
+                 h = seed ? seed : 0xcbf29ce484222325
+                 h = (h * 0x100000001b3) ^ byte          -- multiply, then xor
+seedIndex      = hash(0, id) % SeedCount
+seed  < 0      -> slot = -seed - 1                       -- the slot, stored directly
+seed  > 0      -> slot = hash(seed, id) % EntryCount
+seed == 0      -> the bucket is empty; the chunk is not in this container
+```
+
+Two details cost time. It is FNV-**1**, not FNV-1a - multiply then xor, not the other way round - and the modulo is taken on the full 64-bit value even though the function returns a `uint32`; truncating first resolves most chunks and quietly misses a few.
+
+Recovering it without source: the bucket-size distribution is the oracle. A container's seed table records, per bucket, whether it is empty (`0`), holds exactly one chunk (a negative seed) or more (a positive one). For 56,411 chunks over 28,206 buckets that is 3,863 empty and 7,558 singletons - and only the right hash reproduces both counts exactly, since any other hash lands near those Poisson figures but not on them. With the function fixed, the full lookup was confirmed for **every chunk of `pakchunk0`** (56,411) and every chunk of an unrelated third-party mod container.
+
+Writing is the inverse, the usual CHD construction: bucket by the unseeded hash, place crowded buckets first with a seed that spreads them across free slots, drop singletons into what is left and record the slot directly. `build_perfect_hash()` re-runs the engine's lookup over the finished table before returning it.
+
+### 12b. `FIoContainerHeader`, version 2
+
+```
+uint32 Magic 'IoCn' | uint32 Version=2 | uint64 ContainerId
+TArray<FPackageId>  PackageIds            -- sorted; the loader binary-searches
+TArray<uint8>       StoreEntries          -- 24 bytes each, then the array data
+TArray<FPackageId>  OptionalSegmentPackageIds   (empty)
+TArray<uint8>       OptionalSegmentStoreEntries (empty)
+FPackageStoreNameMap RedirectsNameMap           (empty name batch)
+TArray<...>          LocalizedPackages          (empty)
+```
+
+Each `FFilePackageStoreEntry` is `int32 ExportCount`, `int32 ExportBundleCount`, then two `{int32 Count, int32 OffsetToDataFromThis}` views - imported package ids and shader map hashes - whose offsets are measured **from the view itself**, not from the end of the pair, and whose data follows the fixed block. `parse_container_header()` / `build_container_header()` round-trip both `pakchunk0`'s header (35,054 packages, 2.0 MB) and a third-party mod's byte for byte.
+
+The fix does not synthesize entries: it copies each package's entry out of `pakchunk0` unchanged, which is correct precisely because a float edit changes no count, no import and no hash.
+
+### 12c. The Rest of the Container
+
+* **Chunks** are written uncompressed (block method 0). Compression only buys size on a 120 KB container, and it keeps the writer independent of Oodle - which is still needed to *read* the game's packages, so this changes nothing for the user, only for the code.
+* **Meta** is a BLAKE3 digest truncated to 20 bytes, zero-padded to 32, plus a flags byte (0 when the chunk is uncompressed).
+* **Directory index** is the same tree the reader in `iostore.py` walks, mounted at `../../../Chronos/Content/`.
+* **The `.pak`** is a stub with an empty index: the engine discovers IoStore containers through pak mounting, so a `.utoc` without a `.pak` of the same name is never looked at. Ours is generated, and matches a working third-party mod's stub byte for byte apart from its path-hash seed and the SHA-1 that follows from it.
+* **`_P`** on the file name is the engine's marker for a patch pak, which mounts after the shipped containers - that is what makes our copy of a package win over `pakchunk0`'s.
+
+`python container.py <container>.utoc` runs both checks against any container on disk - it resolves every chunk through the perfect hash and rebuilds the container header - and is how the numbers above were produced. It passes on `pakchunk0`, on `pakchunk1`, on a third-party mod, and on what this fix writes.
+
+### 12d. What the File Checks Cannot Prove
+
+Everything above is verified against files, and the finished container is read back through our own reader before the installer reports success. Whether the running game *mounts* `Content/Paks/Mods/` and prefers our packages is the one claim no file check can settle. **Confirmed in game at 5120x2160**: the container mounts and its packages win over `pakchunk0`'s. It stays the thing to check first if the UI ever comes up 16:9 with all three files in place - most likely after a game update, which is what the staleness check in 9c-3 is for.
