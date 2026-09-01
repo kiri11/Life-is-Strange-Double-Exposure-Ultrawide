@@ -1,0 +1,334 @@
+[
+ {
+  "name": "tiny1-L1",
+  "input": "tiny1",
+  "level": 1,
+  "raw_size": 1,
+  "size": 3,
+  "sha256": "72dfcfb0c470ac255cde83fb8fe38de8a128188e03ea5ba5b2a93adbea1062fa",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "tiny1-L4",
+  "input": "tiny1",
+  "level": 4,
+  "raw_size": 1,
+  "size": 3,
+  "sha256": "72dfcfb0c470ac255cde83fb8fe38de8a128188e03ea5ba5b2a93adbea1062fa",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "tiny1-L9",
+  "input": "tiny1",
+  "level": 9,
+  "raw_size": 1,
+  "size": 3,
+  "sha256": "72dfcfb0c470ac255cde83fb8fe38de8a128188e03ea5ba5b2a93adbea1062fa",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "tiny8-L4",
+  "input": "tiny8",
+  "level": 4,
+  "raw_size": 8,
+  "size": 10,
+  "sha256": "fd2b330350de25cec0e5675befc1743a364f4b632b8a40e68bbd548916b65e71",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "tiny8-L9",
+  "input": "tiny8",
+  "level": 9,
+  "raw_size": 8,
+  "size": 10,
+  "sha256": "fd2b330350de25cec0e5675befc1743a364f4b632b8a40e68bbd548916b65e71",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "tiny9-L4",
+  "input": "tiny9",
+  "level": 4,
+  "raw_size": 9,
+  "size": 11,
+  "sha256": "ca8602e0a6de6e799e0b048274abc76cc1d7e86bf1c55e621da8ce830517514c",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "tiny9-L9",
+  "input": "tiny9",
+  "level": 9,
+  "raw_size": 9,
+  "size": 11,
+  "sha256": "ca8602e0a6de6e799e0b048274abc76cc1d7e86bf1c55e621da8ce830517514c",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "zeros-L1",
+  "input": "zeros",
+  "level": 1,
+  "raw_size": 300000,
+  "size": 12,
+  "sha256": "886715e4051e827f4fe215df3053af3f85ad0d352db2c829c7487af6d78efe30",
+  "keys": [
+   "stream:memset"
+  ]
+ },
+ {
+  "name": "zeros-L4",
+  "input": "zeros",
+  "level": 4,
+  "raw_size": 300000,
+  "size": 12,
+  "sha256": "886715e4051e827f4fe215df3053af3f85ad0d352db2c829c7487af6d78efe30",
+  "keys": [
+   "stream:memset"
+  ]
+ },
+ {
+  "name": "small-L4",
+  "input": "small",
+  "level": 4,
+  "raw_size": 100,
+  "size": 102,
+  "sha256": "e79b2536223072ed2ce0532483c68d8028037a566cc98130069dffa245b9e33f",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "small-L9",
+  "input": "small",
+  "level": 9,
+  "raw_size": 100,
+  "size": 102,
+  "sha256": "e79b2536223072ed2ce0532483c68d8028037a566cc98130069dffa245b9e33f",
+  "keys": [
+   "stream:uncompressed"
+  ]
+ },
+ {
+  "name": "rleish-L8-sst1",
+  "input": "rleish",
+  "level": 8,
+  "raw_size": 100000,
+  "size": 4608,
+  "sha256": "57733d708e41d8b5998407223748d7d61628aa4a62ad248e9b52bb5de5fe28ec",
+  "keys": [
+   "block:1",
+   "block:2",
+   "block:3",
+   "huff:new",
+   "lz:1",
+   "offsets:scaled1"
+  ]
+ },
+ {
+  "name": "rleish-L8",
+  "input": "rleish",
+  "level": 8,
+  "raw_size": 100000,
+  "size": 4683,
+  "sha256": "57733d708e41d8b5998407223748d7d61628aa4a62ad248e9b52bb5de5fe28ec",
+  "keys": [
+   "block:0",
+   "block:2",
+   "block:3",
+   "huff:new",
+   "lz:1",
+   "offsets:classic"
+  ]
+ },
+ {
+  "name": "rleish-L4-sst1",
+  "input": "rleish",
+  "level": 4,
+  "raw_size": 100000,
+  "size": 5093,
+  "sha256": "57733d708e41d8b5998407223748d7d61628aa4a62ad248e9b52bb5de5fe28ec",
+  "keys": [
+   "block:2",
+   "block:3",
+   "huff:new",
+   "quantum:entropy"
+  ]
+ },
+ {
+  "name": "LICENSE-L7",
+  "input": "LICENSE",
+  "level": 7,
+  "raw_size": 37561,
+  "size": 12106,
+  "sha256": "01d698181f5c16e79022c5fc16da5e987be55832d197b136b3f47933206fec18",
+  "keys": [
+   "block:0",
+   "block:2",
+   "block:4",
+   "block:5",
+   "huff:new",
+   "lz:1",
+   "multi:interleaved",
+   "offsets:scaled1"
+  ]
+ },
+ {
+  "name": "LICENSE-L9",
+  "input": "LICENSE",
+  "level": 9,
+  "raw_size": 37561,
+  "size": 12109,
+  "sha256": "01d698181f5c16e79022c5fc16da5e987be55832d197b136b3f47933206fec18",
+  "keys": [
+   "block:0",
+   "block:2",
+   "block:4",
+   "block:5",
+   "huff:new",
+   "lz:1",
+   "multi:interleaved",
+   "offsets:scaled1"
+  ]
+ },
+ {
+  "name": "LICENSE-L6-crc",
+  "input": "LICENSE",
+  "level": 6,
+  "raw_size": 37561,
+  "size": 12229,
+  "sha256": "01d698181f5c16e79022c5fc16da5e987be55832d197b136b3f47933206fec18",
+  "keys": [
+   "block:2",
+   "block:4",
+   "huff:new",
+   "lz:1",
+   "offsets:scaled1"
+  ]
+ },
+ {
+  "name": "LICENSE-L4",
+  "input": "LICENSE",
+  "level": 4,
+  "raw_size": 37561,
+  "size": 12896,
+  "sha256": "01d698181f5c16e79022c5fc16da5e987be55832d197b136b3f47933206fec18",
+  "keys": [
+   "block:2",
+   "block:4",
+   "block:5",
+   "huff:new",
+   "lz:1",
+   "offsets:classic"
+  ]
+ },
+ {
+  "name": "LICENSE-L1",
+  "input": "LICENSE",
+  "level": 1,
+  "raw_size": 37561,
+  "size": 14521,
+  "sha256": "01d698181f5c16e79022c5fc16da5e987be55832d197b136b3f47933206fec18",
+  "keys": [
+   "block:2",
+   "block:4",
+   "huff:new",
+   "lz:1",
+   "offsets:classic"
+  ]
+ },
+ {
+  "name": "rec16i-L8-sst1",
+  "input": "rec16i",
+  "level": 8,
+  "raw_size": 120000,
+  "size": 17255,
+  "sha256": "ebfb9fd3c007d7330acab44f50aaeada1c9340aa5428c88166f4b4825ebb7ef7",
+  "keys": [
+   "block:0",
+   "block:1",
+   "block:2",
+   "huff:new",
+   "lz:0",
+   "offsets:scaled16"
+  ]
+ },
+ {
+  "name": "RESEARCH.md-L8-sst1",
+  "input": "RESEARCH.md",
+  "level": 8,
+  "raw_size": 57898,
+  "size": 21612,
+  "sha256": "6864654ee6b4cc74087e0d92cc7f510b0ec456243b9044691fa5ff744c1f15c3",
+  "keys": [
+   "block:1",
+   "block:2",
+   "block:5",
+   "huff:new",
+   "huff:old",
+   "lz:1",
+   "multi:interleaved",
+   "offsets:scaled1"
+  ]
+ },
+ {
+  "name": "quantum+1-L6",
+  "input": "quantum+1",
+  "level": 6,
+  "raw_size": 57898,
+  "size": 21657,
+  "sha256": "6864654ee6b4cc74087e0d92cc7f510b0ec456243b9044691fa5ff744c1f15c3",
+  "keys": [
+   "block:4",
+   "huff:new",
+   "lz:1",
+   "offsets:scaled1"
+  ]
+ },
+ {
+  "name": "rec12-L7-sst1",
+  "input": "rec12",
+  "level": 7,
+  "raw_size": 120000,
+  "size": 107855,
+  "sha256": "53a671b715dedc68575d0054f59018286a5765583fcbe9489632bdc56fe73a76",
+  "keys": [
+   "block:1",
+   "block:2",
+   "huff:new",
+   "lz:0",
+   "offsets:scaled48"
+  ]
+ },
+ {
+  "name": "big-L7-sst1",
+  "input": "big",
+  "level": 7,
+  "raw_size": 343024,
+  "size": 163712,
+  "sha256": "d90482c5c7022402a11297cb7e9bdf66f6eb3b42bce77538e362d57fb7804179",
+  "keys": [
+   "block:0",
+   "block:1",
+   "block:2",
+   "block:5",
+   "huff:new",
+   "lz:1",
+   "multi:interleaved",
+   "offsets:scaled1",
+   "offsets:scaled16",
+   "offsets:scaled80"
+  ]
+ }
+]

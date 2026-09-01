@@ -1,34 +1,41 @@
 # Asset dump toolchain
 
 Inspection of *Life is Strange: Double Exposure* game data, and the writer that
-publishes the full-width UI fix as a mod container. Pure Python 3 plus one native
-DLL for Oodle decompression. No FModel / retoc / UAssetGUI required.
+publishes the full-width UI fix as a mod container. Pure Python 3, including the
+decompressor. No FModel / retoc / UAssetGUI required, and nothing to download.
 
 The game's own files are only ever read: the fix writes a container of its own into
 `Content/Paks/Mods/`, which the engine mounts after `pakchunk0` and which therefore
 shadows the packages in it.
 
 The game's containers are **not encrypted** (`ContainerFlags=0x09` = Compressed|Indexed,
-null `EncryptionKeyGuid`, plaintext directory index). Oodle is the only real gate.
+null `EncryptionKeyGuid`, plaintext directory index). Every compressed block is Oodle
+Kraken, and `kraken.py` decodes it.
 
-## Setup
+## Decompression
 
-Oodle ships statically linked inside `Chronos-Win64-Shipping.exe`, so a standalone
-decompressor is needed. **`patcher.py` handles this automatically** - it reuses one
-shipped by another Unreal Engine game if you have one, and otherwise offers to
-download Epic's Oodle-for-UE build. To do it by hand instead:
+Oodle ships statically linked inside `Chronos-Win64-Shipping.exe`, and Epic's own
+decompressor cannot be redistributed, so `kraken.py` is a pure-Python port of the
+Kraken decoder from [ooz](https://github.com/powzix/ooz) (GPL-3.0-or-later, like this
+project). `oodle.py` is the one entry point the readers call; it uses `kraken.py`
+unless `LISDE_OODLE_DLL` names a native Oodle library, which is only worth doing for
+research runs that decode far more than the fix does (the Python decoder manages
+roughly 7 MB/s). The installer never sets that variable and never looks for a library.
 
-    curl -sL -o oodle.zip https://github.com/WorkingRobot/OodleUE/releases/latest/download/msvc-x64-release.zip
-    # extract bin/oodle-data-shared.dll next to oodle.py
+`kraken.py` handles Kraken only (decoder type 6). Mermaid, Selkie, Leviathan, LZNA
+and Bitknit are rejected with a named error.
 
-`oodle.py` loads, in order: `$LISDE_OODLE_DLL` (set by `patcher.py` when it locates
-one elsewhere), then `oodle-data-shared.dll` / `oo2core_*_win64.dll` in this folder.
+`../../tests/test_kraken.py` checks the decoder against streams made by Epic's
+compressor from non-game inputs, and `verify_kraken.py` here compares it with a native
+Oodle library on the game's own blocks - run that after a game update, on a machine
+that has such a library.
 
 ## Files
 
 | File | Purpose |
 | :--- | :--- |
-| `oodle.py`   | `OodleLZ_Decompress` via ctypes |
+| `kraken.py`  | pure-Python Oodle Kraken decoder |
+| `oodle.py`   | `decompress()` for the readers: `kraken.py`, or a native library when `LISDE_OODLE_DLL` is set |
 | `iostore.py` | `.utoc`/`.ucas` reader: header, chunk table, compression blocks, plaintext directory index, `global.utoc` script-object table |
 | `pak.py`     | UE5 `.pak` v11 reader (index + encoded entries) - holds the cooked `.ini` config |
 | `zen.py`     | Zen package parser: name batch, import/export maps, export-bundle data layout |
@@ -36,6 +43,8 @@ one elsewhere), then `oodle-data-shared.dll` / `oo2core_*_win64.dll` in this fol
 | `slots.py`   | `UCanvasPanelSlot` decoder - prints anchors/offsets/alignment per widget |
 | `container.py` | `.utoc`/`.ucas`/`.pak` **writer**: TOC perfect hash, `FIoContainerHeader`, directory index, stub pak (RESEARCH.md 12) |
 | `patch_ui_layout.py` | the fix itself: edits the UI slots and publishes the result as a mod container |
+| `verify_kraken.py` | research check: `kraken.py` against a native Oodle library on the game's blocks |
+| `make_kraken_vectors.py` | regenerates `tests/kraken/` from non-game inputs; needs Oodle 2.9.10 with `OodleLZ_Compress` |
 
 ## Usage
 

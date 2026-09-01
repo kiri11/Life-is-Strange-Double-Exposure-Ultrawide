@@ -24,7 +24,7 @@ None of that is something you have to take on trust. The exe in each release is 
 
 ### Method 2: Command line
 
-> **Tested on Windows only.** The installer is written to work on SteamOS and the Steam Deck, on Linux under Proton, and on macOS: the game search knows those install layouts, and `Engine.ini` is looked up inside a Proton prefix. None of that has been run on real hardware, though, and one gap is known - the full-width UI step needs a Linux build of the Oodle decompressor, while the automatic download fetches the Windows one, so on a native Linux run that step will skip itself and the other three will still install. If you are on one of those systems and something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) - or send a pull request, it is a small installer and the platform-specific parts are all in `patcher.py`.
+> **Tested on Windows only.** The installer is written to work on SteamOS and the Steam Deck, on Linux under Proton, and on macOS: the game search knows those install layouts, and `Engine.ini` is looked up inside a Proton prefix. None of that has been run on real hardware, though. If you are on one of those systems and something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) - or send a pull request, it is a small installer and the platform-specific parts are all in `patcher.py`.
 
 #### Optional: install uv
 
@@ -64,7 +64,7 @@ python patcher.py --restore
 
 The game is located automatically ([how](RESEARCH.md#8a-where-the-installer-looks-for-the-game)), so the installer can live anywhere. Pass `--exe "...\Chronos-Win64-Shipping.exe"` to point it at a specific copy, `--find-exe` to print what it found and exit, or `--check-exe` to report whether that executable is stock, already patched, or a version the signatures no longer match.
 
-**Requirements:** Python 3.6+ and nothing else - the standard library covers everything. The full-width UI step hashes with the compiled `blake3` module when it happens to be installed and falls back to a bundled pure-Python BLAKE3 otherwise, and it needs an Oodle decompressor, which the installer fetches by itself the first time - [why, and from where](RESEARCH.md#9e-obtaining-the-oodle-decompressor). `--no-fetch-oodle` forbids that download. If either is unavailable, that one step is skipped and reported; everything else still installs.
+**Requirements:** Python 3.6+ and nothing else - the standard library covers everything, and nothing is downloaded. The full-width UI step reads the game's Oodle-compressed packages with a pure-Python Kraken decoder that ships in `tools/assetdump/` ([how](RESEARCH.md#9e-reading-oodle-compressed-packages)), and it hashes with the compiled `blake3` module when that happens to be installed, falling back to a bundled pure-Python BLAKE3 otherwise.
 
 ### Checking what you have
 
@@ -87,7 +87,7 @@ A second line reports the full-width UI. Its container is built from ten of the 
 | **Needs installing again** | Files are missing from the set, or nothing records what they were built from. |
 | **Not installed** | The step was never run, or was restored. |
 
-The check reads a megabyte of the game's data and nothing else - no Oodle, no container parsing - so it also answers on a machine where the step itself would be skipped.
+The check reads a megabyte of the game's data and nothing else - no decoding, no container parsing.
 
 ### What each option does
 
@@ -142,7 +142,7 @@ TSR - UE5's temporal upscaler - is what makes this game look soft. The two setti
 ## Troubleshooting
 
 - **A cutscene shows black bars:** report which scene - its camera is authored at an unusual aspect ratio and the gate can be widened for it.
-- **The full-width UI step was skipped:** it needs an Oodle decompressor to read the game's packages, which is downloaded automatically unless you passed `--no-fetch-oodle`. If the download failed, drop any `oo2core_*_win64.dll` from another Unreal Engine game into `tools/assetdump/` and re-run.
+- **The full-width UI step reported an error reading a package:** the game's packages are decoded by `tools/assetdump/kraken.py`, and a package it cannot read is a bug in that decoder or a game update that changed the compression. Say so in an issue with the exact line - it names the package.
 - **The UI is still 16:9 after a game update:** the installer's second status line will say the container was built for a different build. Run **Install** again.
 - **The UI is still 16:9 in game:** check that `Chronos/Content/Paks/Mods/LiSUltrawideUI_P.utoc`, `.ucas` and `.pak` are all present - the three belong together. If they are and nothing changed, say so in an issue with your resolution; the container is only mounted if the game scans that folder, and that is the one thing this fix cannot check from outside the game.
 - **Everything looks wrong after a game update:** re-run the installer. It re-takes its backups from the updated game, and all code sites are located by unique byte signatures, so it either patches the new build or tells you in one line that this build needs a new version of the fix.

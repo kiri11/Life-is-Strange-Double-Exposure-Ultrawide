@@ -47,7 +47,6 @@ Compatible with Python 3.6+ (3.8+ under uv).
 VERSION = "2026.08.31.1"
 
 import argparse
-import hashlib
 import io
 import json
 import os
@@ -1216,175 +1215,6 @@ def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
 
 
 # ---------------------------------------------------------------------------
-# Oodle decompressor acquisition
-# ---------------------------------------------------------------------------
-# The game's containers are 97% Oodle-compressed and Oodle ships *statically
-# linked* inside the game executable, so reading a package needs a standalone
-# decompressor. It cannot be bundled here (proprietary, and redistributing it
-# is governed by the Unreal Engine EULA), so it is located or fetched instead:
-#
-#   1. one already sitting in tools/assetdump/ or next to this script;
-#   2. one shipped by another Unreal Engine game on this machine - most UE
-#      titles carry oo2core_*_win64.dll, and it exports the same entry point;
-#   3. failing that, Epic's Oodle-for-UE source build, downloaded automatically.
-#
-# Only step 3 touches the network, and only when the full-width UI step is
-# actually going to run and steps 1-2 came up empty. --no-fetch-oodle turns
-# that download off; the step is then skipped and reported.
-
-# Pinned, not "latest": this downloads a binary that then runs on the user's
-# machine, so it has to be a known one. The hash is of the DLL inside the zip
-# (the zip itself is repacked by the build that made it), and a mismatch means
-# the download is refused, never used. To move to a newer build, change both
-# lines together and check the new hash by hand.
-OODLE_RELEASE = "2026-06-04-1357"
-OODLE_ZIP_URL = ("https://github.com/WorkingRobot/OodleUE/releases/download/"
-                 "{}/msvc-x64-release.zip".format(OODLE_RELEASE))
-OODLE_DLL_SHA256 = \
-    "1f28ffecd7ad1b75be89ea5a85ad74b4e7f998994d7dcf5f69eddfd3bca4aeb2"
-
-OODLE_NAMES = ("oodle-data-shared.dll", "oo2core_9_win64.dll",
-               "oo2core_8_win64.dll", "liboodle-data-shared.so")
-
-
-def user_cache_dir():
-    """Per-user store for downloads, for when the fix's own folder is read-only."""
-    if os.name == "nt":
-        root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    elif sys.platform == "darwin":
-        root = os.path.join(os.path.expanduser("~"), "Library", "Caches")
-    else:
-        root = (os.environ.get("XDG_CACHE_HOME")
-                or os.path.join(os.path.expanduser("~"), ".cache"))
-    return os.path.join(root, "LiSUltrawideFix")
-
-
-def writable_dir(path):
-    """True if a file can be created in path, creating the directory if needed."""
-    try:
-        if not os.path.isdir(path):
-            os.makedirs(path)
-        probe = os.path.join(path, ".write-probe")
-        with open(probe, "wb"):
-            pass
-        os.remove(probe)
-        return True
-    except (IOError, OSError):
-        return False
-
-
-def oodle_dir(for_writing=False):
-    """Where the DLL goes: beside the code that loads it, or - when the fix was
-    unpacked somewhere read-only, Program Files or a shared drive - a per-user
-    cache instead. Reads look in both; only writes need to pick one."""
-    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "tools", "assetdump")
-    if not for_writing or writable_dir(beside):
-        return beside
-    return os.path.join(user_cache_dir(), "assetdump")
-
-
-def find_oodle(exe_path=None):
-    """-> path to a usable Oodle DLL, or None. Never touches the network."""
-    import glob
-    here = os.path.dirname(os.path.abspath(__file__))
-    for d in (oodle_dir(), os.path.join(user_cache_dir(), "assetdump"), here):
-        for n in OODLE_NAMES:
-            p = os.path.join(d, n)
-            if os.path.isfile(p):
-                return p
-    if not exe_path:
-        return None
-    # <library>/<game>/Chronos/Binaries/Win64/x.exe -> <library>
-    library = os.path.abspath(exe_path)
-    for _ in range(5):
-        library = os.path.dirname(library)
-    patterns = [
-        os.path.join(library, "*", "Engine", "Binaries", "ThirdParty",
-                     "Oodle", "*", "*", "*.dll"),
-        os.path.join(library, "*", "Engine", "Binaries", "ThirdParty",
-                     "Oodle", "*", "*.dll"),
-        os.path.join(library, "*", "*", "Binaries", "Win64", "oo2core*.dll"),
-    ]
-    for pattern in patterns:
-        for hit in sorted(glob.glob(pattern)):
-            base = os.path.basename(hit).lower()
-            if base.startswith("oo2core") or "oodle" in base:
-                return hit
-    return None
-
-
-def fetch_oodle():
-    """Download Epic's Oodle-for-UE build and keep the decompressor. -> path/None."""
-    import zipfile
-    try:
-        from urllib.request import urlopen, Request
-    except ImportError:                                   # Python 2 safety net
-        from urllib2 import urlopen, Request
-
-    dest_dir = oodle_dir(for_writing=True)
-    zip_path = os.path.join(dest_dir, "_oodle_download.zip")
-    try:
-        if not os.path.isdir(dest_dir):
-            os.makedirs(dest_dir)
-        print("  downloading {} ...".format(OODLE_ZIP_URL))
-        req = Request(OODLE_ZIP_URL, headers={"User-Agent": "LiSUltrawideFix"})
-        data = urlopen(req).read()
-        with open(zip_path, "wb") as f:
-            f.write(data)
-        print("  {:.1f} MB downloaded, extracting...".format(len(data) / 1e6))
-
-        with zipfile.ZipFile(zip_path) as z:
-            wanted = None
-            for name in z.namelist():
-                base = name.rsplit("/", 1)[-1].lower()
-                if base == "oodle-data-shared.dll":
-                    wanted = name
-                    break
-                if wanted is None and (base.startswith("oo2core")
-                                       and base.endswith(".dll")):
-                    wanted = name
-            if wanted is None:
-                print("  !! the archive contained no Oodle DLL")
-                return None
-            with z.open(wanted) as src:
-                payload = src.read()
-        digest = hashlib.sha256(payload).hexdigest()
-        if digest != OODLE_DLL_SHA256:
-            print("  !! the downloaded decompressor is not the expected one")
-            print("     (sha256 {} - expected {})".format(digest, OODLE_DLL_SHA256))
-            print("     Refusing to use it. Nothing else was affected.")
-            return None
-        out = os.path.join(dest_dir, "oodle-data-shared.dll")
-        with open(out, "wb") as dst:
-            dst.write(payload)
-        print("  Oodle ready (sha256 verified): {}".format(out))
-        return out
-    except Exception as ex:
-        print("  !! download failed: {}".format(ex))
-        print("     Fetch it manually - see tools/assetdump/README.md")
-        return None
-    finally:
-        try:
-            if os.path.isfile(zip_path):
-                os.remove(zip_path)
-        except Exception:
-            pass
-
-
-def ensure_oodle(exe_path, allow_fetch=True):
-    """Locate Oodle, downloading it when there is none. -> path or None."""
-    found = find_oodle(exe_path)
-    if found:
-        return found
-    if not allow_fetch:
-        print("  no Oodle decompressor found, and --no-fetch-oodle was given")
-        return None
-    print("\n  No Oodle decompressor on this machine - fetching Epic's")
-    print("  Oodle-for-UE build {} (~7 MB, once):".format(OODLE_RELEASE))
-    return fetch_oodle()
-
-# ---------------------------------------------------------------------------
 # Game-file (UI layout) patch - delegates to tools/assetdump/patch_ui_layout.py
 # ---------------------------------------------------------------------------
 
@@ -1406,8 +1236,8 @@ def check_game_files(exe_path):
 
     -> (status, one-line detail), from `patch_ui_layout.py --verify`. Answering
     here rather than in this file keeps one description of what is installed,
-    and the check itself reads a megabyte of the game's data - no Oodle, no
-    container parsing, nothing that could prompt or download.
+    and the check itself reads a megabyte of the game's data - no decoding, no
+    container parsing, nothing that could prompt.
 
     The one that matters is `stale`: a game update replaces the packages the
     container was built from, and unlike the old in-place patch - which an
@@ -1441,7 +1271,7 @@ def check_game_files(exe_path):
     return status, detail
 
 
-def apply_game_files(exe_path, width, height, restore=False, oodle_dll=None):
+def apply_game_files(exe_path, width, height, restore=False):
     import subprocess
     script = ui_script()
     if script is None:
@@ -1457,8 +1287,6 @@ def apply_game_files(exe_path, width, height, restore=False, oodle_dll=None):
     # sets the same pair for patcher.py itself; this covers a plain console run.
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
-    if oodle_dll:
-        env["LISDE_OODLE_DLL"] = oodle_dll
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, env=env)
@@ -1512,15 +1340,14 @@ def choose_resolution(detected):
 
 
 def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, restore=False, fetch_oodle_ok=True):
+                do_sharpen, restore=False):
     if restore:
         print("\nRestoring everything to stock...")
         ok = True
         if do_exe:
             patch_exe(exe_path, 16, 9, "stock")
         if do_files:
-            ok = apply_game_files(exe_path, width, height, restore=True,
-                                  oodle_dll=find_oodle(exe_path)) and ok
+            ok = apply_game_files(exe_path, width, height, restore=True) and ok
         if do_chromatic or do_sharpen:
             apply_engine_ini(width, height, False, False, remove=True)
         print("\nDone - the game is back to its shipped state." if ok else
@@ -1539,14 +1366,7 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
 
     print("\n[2/3] Full-width UI (game files)")
     if do_files:
-        oodle = ensure_oodle(exe_path, fetch_oodle_ok)
-        if oodle:
-            print("  using Oodle: {}".format(oodle))
-            ok = apply_game_files(exe_path, width, height, oodle_dll=oodle) and ok
-        else:
-            print("  !! skipped - no Oodle decompressor is available.")
-            print("     Everything else was still applied.")
-            ok = False
+        ok = apply_game_files(exe_path, width, height) and ok
     else:
         print("  skipped")
 
@@ -1585,11 +1405,11 @@ def run():
                         help="skip the ultrawide camera patch (the executable)")
     parser.add_argument("--no-game-files", action="store_true",
                         help="skip the full-width UI patch (the game data files)")
-    parser.add_argument("--no-fetch-oodle", action="store_true",
-                        help="never download the Oodle decompressor the full-width "
-                             "UI step needs; skip that step instead")
-    parser.add_argument("--fetch-oodle", action="store_true",
-                        help=argparse.SUPPRESS)      # accepted; now the default
+    # accepted and ignored: older releases downloaded an Oodle decompressor for
+    # the full-width UI step, and these switched that off or on. The step now
+    # decodes with tools/assetdump/kraken.py and never downloads anything.
+    parser.add_argument("--no-fetch-oodle", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--fetch-oodle", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-chromatic-fix", action="store_true",
                         help="skip disabling chromatic aberration")
     parser.add_argument("--sharpen", action="store_true",
@@ -1695,7 +1515,7 @@ def run():
         return
 
     run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, fetch_oodle_ok=not args.no_fetch_oodle)
+                do_sharpen)
 
 
 def survive_odd_characters():
