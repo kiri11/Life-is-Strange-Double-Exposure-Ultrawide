@@ -917,7 +917,7 @@ def write_failure(path, ex):
         return ("{} is in use - close the game (and Steam) and try again."
                 .format(os.path.basename(path)))
     if win == 5 or errno == 13:
-        return ("Windows refused permission to write {}. Close the game, and if "
+        return ("The system refused permission to write {}. Close the game, and if "
                 "it is installed under Program Files, run this installer as "
                 "administrator.".format(path))
     if win == 112 or errno == 28:
@@ -1076,23 +1076,55 @@ INI_BEGIN = "; ===== BEGIN LiS:DE Ultrawide Fix (managed block - safe to delete)
 INI_END = "; ===== END LiS:DE Ultrawide Fix ====="
 
 
-def engine_ini_path():
-    """Locate the user's Engine.ini (native Windows first, then a Proton prefix)."""
+def _library_of(exe_path):
+    """<library>/steamapps/common/<game>/.../x.exe -> <library>, or None."""
+    path = os.path.dirname(os.path.abspath(exe_path))
+    while True:
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        if os.path.basename(path).lower() == "steamapps":
+            return parent
+        path = parent
+
+
+def _proton_prefix(library):
+    """Where Steam keeps the game's Proton prefix for this library."""
+    return os.path.join(_child(library, "steamapps"), "compatdata", STEAM_APPID, "pfx")
+
+
+def engine_ini_path(exe_path=None):
+    """Locate the user's Engine.ini: native Windows first, then a Proton prefix.
+
+    Under Proton the game writes its settings inside a prefix that Steam keeps
+    in the same library as the game, so the game's own location is the best
+    lead; every other library Steam knows about is tried after it. Steam
+    creates the prefix the first time the game is started, so before that
+    there is nowhere to write and this returns None.
+    """
     base = os.environ.get("LOCALAPPDATA")
     if base:
         p = os.path.join(base, "Chronos", "Saved", "Config", "Windows", "Engine.ini")
         if os.path.isdir(os.path.dirname(p)):
             return p
-    import glob
-    home = os.path.expanduser("~")
-    for root in (os.path.join(home, ".steam", "steam"),
-                 os.path.join(home, ".local", "share", "Steam")):
-        hits = glob.glob(os.path.join(
-            root, "steamapps", "compatdata", "*", "pfx", "drive_c", "users",
-            "steamuser", "AppData", "Local", "Chronos", "Saved", "Config",
-            "Windows", "Engine.ini"))
-        if hits:
-            return hits[0]
+    libraries = []
+    if exe_path:
+        library = _library_of(exe_path)
+        if library:
+            libraries.append(library)
+    libraries += _steam_libraries()
+    seen = set()
+    for library in libraries:
+        pfx = _proton_prefix(library)
+        if os.path.normcase(pfx) in seen:
+            continue
+        seen.add(os.path.normcase(pfx))
+        # drive_c is there once the game has run; the Chronos folders under
+        # it may not be yet, and apply_engine_ini creates them
+        if os.path.isdir(os.path.join(pfx, "drive_c")):
+            return os.path.join(pfx, "drive_c", "users", "steamuser", "AppData",
+                                "Local", "Chronos", "Saved", "Config", "Windows",
+                                "Engine.ini")
     if base:
         return os.path.join(base, "Chronos", "Saved", "Config", "Windows", "Engine.ini")
     return None
@@ -1172,10 +1204,14 @@ def strip_ini_block(text):
     return "".join(out)
 
 
-def apply_engine_ini(width, height, chromatic, sharpness, remove=False):
-    path = engine_ini_path()
+def apply_engine_ini(exe_path, width, height, chromatic, sharpness, remove=False):
+    path = engine_ini_path(exe_path)
     if not path:
         print("  !! could not locate Engine.ini - skipping the display tweaks")
+        if os.name != "nt":
+            print("     It lives in the game's Proton prefix, which Steam creates "
+                  "the first time the game is started. Start the game once, "
+                  "quit, and run this installer again.")
         return False
     old = ""
     if os.path.isfile(path):
@@ -1349,7 +1385,7 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
         if do_files:
             ok = apply_game_files(exe_path, width, height, restore=True) and ok
         if do_chromatic or do_sharpen:
-            apply_engine_ini(width, height, False, False, remove=True)
+            apply_engine_ini(exe_path, width, height, False, False, remove=True)
         print("\nDone - the game is back to its shipped state." if ok else
               "\nDone - one part could not be undone, see above.")
         return ok
@@ -1372,7 +1408,7 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
 
     print("\n[3/3] Display tweaks (Engine.ini)")
     if do_chromatic or do_sharpen:
-        apply_engine_ini(width, height, do_chromatic, do_sharpen)
+        apply_engine_ini(exe_path, width, height, do_chromatic, do_sharpen)
     else:
         print("  skipped")
 

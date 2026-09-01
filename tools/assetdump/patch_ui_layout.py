@@ -481,7 +481,7 @@ def cli():
             print('error: the game data is in use - close the game and Steam, '
                   'then try again.')
         elif win == 5 or getattr(ex, 'errno', None) == 13:
-            print('error: Windows refused permission to write the game data. '
+            print('error: the system refused permission to write the game data. '
                   'Close the game, and if it is installed under Program Files, '
                   'run the installer as administrator.')
         elif win == 112 or getattr(ex, 'errno', None) == 28:
