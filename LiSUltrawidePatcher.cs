@@ -1211,9 +1211,8 @@ namespace LiSUltrawidePatcher
             // Elevation can land in a different account - a standard user who
             // types an administrator's password gets that administrator's
             // profile - and then %LOCALAPPDATA% is the wrong one: Engine.ini
-            // would be written where the game will never read it, and the
-            // downloaded Oodle DLL cached where the next ordinary run cannot
-            // find it. Both are the invoking user's, so pass theirs through.
+            // would be written where the game will never read it. It is the
+            // invoking user's, so pass theirs through.
             string local = Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData);
             string keepLocal = string.IsNullOrEmpty(local)

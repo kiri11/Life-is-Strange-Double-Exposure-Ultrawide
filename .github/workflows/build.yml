@@ -18,7 +18,25 @@ permissions:
   contents: write
 
 jobs:
+  # The Kraken decoder is plain Python and has to give the same bytes on every
+  # platform the fix claims - so the same vectors are decoded on Linux and on
+  # Windows, with the oldest Python the runners offer and the newest.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.8', '3.x']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python tests/test_kraken.py -v
+
   build:
+    needs: test
     runs-on: windows-latest
 
     steps:
@@ -64,14 +82,14 @@ jobs:
 
       # What a user needs to run the fix, plus the one file the license needs.
       # tools/assetdump is not optional: patcher.py shells out to
-      # patch_ui_layout.py for the full-width UI step and drops the Oodle DLL in
-      # that same folder, so a zip without it silently installs three of the
-      # four parts. LiSUltrawidePatcher.cs is not on the runtime path either,
+      # patch_ui_layout.py for the full-width UI step, so a zip without it
+      # silently installs three of the four parts. LiSUltrawidePatcher.cs is not on the runtime path either,
       # but it is the exe's source, and shipping it makes the archive its own
       # corresponding source under GPL-3 section 6 - so a download from a mod
       # site carries everything the license promises, with no link to follow.
-      # The research scripts (audit_offsets, pak, usmap), RESEARCH.md and
-      # make_icon.py are not on the runtime path and stay in the repository only.
+      # The research scripts (audit_offsets, pak, usmap, verify_kraken,
+      # make_kraken_vectors), the tests, RESEARCH.md and make_icon.py are not
+      # on the runtime path and stay in the repository only.
       - name: Stage the release files
         shell: pwsh
         run: |
@@ -88,9 +106,10 @@ jobs:
             'patch_ui_layout.py',        # entry point patcher.py invokes
             'container.py',              # writes the mod container it installs
             'iostore.py', 'zen.py', 'slots.py', 'unver.py',  # container readers
-            'oodle.py',                  # loads the decompressor patcher.py fetches
+            'kraken.py',                 # pure-Python Oodle Kraken decoder
+            'oodle.py',                  # the readers' decompress() entry point
             'blake3_pure.py',            # stdlib BLAKE3, so no wheel is required
-            'README.md'                  # where to get Oodle if the fetch fails
+            'README.md'                  # what each of these files is
           )
           foreach ($f in $top) { Copy-Item $f "$root/$f" }
           foreach ($f in $assetdump) { Copy-Item "tools/assetdump/$f" "$root/tools/assetdump/$f" }

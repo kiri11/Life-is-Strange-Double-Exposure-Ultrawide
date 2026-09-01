@@ -1,52 +1,52 @@
-import ctypes, glob, os
+"""
+Oodle decompression for the container readers.
+
+The fix decodes with the pure-Python Kraken decoder in kraken.py - no native
+library, nothing to download, the same code on Windows, Linux and macOS.
+
+A native Oodle library is still useful for the research scripts, which read
+far more than the fix ever does: set LISDE_OODLE_DLL to a path to use one.
+Nothing looks for a DLL on its own any more, so an installer run can never
+load a library it did not ask for.
+"""
+import ctypes, os, sys
+
+import kraken
+
+_native = None
 
 
-def _locate():
-    """Find an Oodle decompressor: an explicit override, then this directory.
-
-    LISDE_OODLE_DLL is set by patcher.py when it locates or downloads one -
-    including a DLL shipped by some other Unreal Engine game on the machine,
-    which exports the same OodleLZ_Decompress entry point.
-    """
-    env = os.environ.get('LISDE_OODLE_DLL')
-    if env and os.path.isfile(env):
-        return env
-    here = os.path.dirname(os.path.abspath(__file__))
-    for pattern in ('oodle-data-shared.dll', 'oo2core_*_win64.dll',
-                    'liboodle-data-shared.so'):
-        hits = sorted(glob.glob(os.path.join(here, pattern)))
-        if hits:
-            return hits[0]
-    raise RuntimeError(
-        'No Oodle decompressor found. Run patcher.py, which can fetch one, '
-        'or see tools/assetdump/README.md.')
+def _load_native(path):
+    if sys.platform == 'win32' and not path.lower().endswith('.dll'):
+        raise RuntimeError('LISDE_OODLE_DLL must name a Windows DLL on Windows: ' + path)
+    if sys.platform != 'win32' and path.lower().endswith('.dll'):
+        raise RuntimeError('LISDE_OODLE_DLL names a Windows DLL, which cannot be '
+                           'loaded on this platform: ' + path)
+    dll = ctypes.CDLL(path)
+    fn = dll.OodleLZ_Decompress
+    fn.restype = ctypes.c_ssize_t
+    fn.argtypes = [ctypes.c_char_p, ctypes.c_ssize_t, ctypes.c_char_p,
+                   ctypes.c_ssize_t, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                   ctypes.c_void_p, ctypes.c_ssize_t, ctypes.c_void_p,
+                   ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ssize_t,
+                   ctypes.c_int]
+    return fn
 
 
-# Loaded on first use, not on import: restoring a backup needs this module's
-# importers but never decompresses anything, and a missing decompressor must not
-# stop someone putting their game back.
-_f = None
-
-
-def _load():
-    global _f
-    if _f is None:
-        dll = ctypes.CDLL(_locate())
-        fn = dll.OodleLZ_Decompress
-        fn.restype = ctypes.c_ssize_t
-        fn.argtypes = [ctypes.c_char_p, ctypes.c_ssize_t, ctypes.c_char_p,
-                       ctypes.c_ssize_t, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                       ctypes.c_void_p, ctypes.c_ssize_t, ctypes.c_void_p,
-                       ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ssize_t,
-                       ctypes.c_int]
-        _f = fn
-    return _f
+def _native_fn():
+    global _native
+    if _native is None:
+        path = os.environ.get('LISDE_OODLE_DLL')
+        _native = _load_native(path) if path and os.path.isfile(path) else False
+    return _native
 
 
 def decompress(src, dstlen):
-    fn = _load()
-    dst = ctypes.create_string_buffer(dstlen)
-    n = fn(src, len(src), dst, dstlen, 1, 0, 0, None, 0, None, None, None, 0, 3)
-    if n != dstlen:
-        raise RuntimeError(f"oodle returned {n}, expected {dstlen}")
-    return dst.raw[:dstlen]
+    fn = _native_fn()
+    if fn:
+        dst = ctypes.create_string_buffer(dstlen)
+        n = fn(src, len(src), dst, dstlen, 1, 0, 0, None, 0, None, None, None, 0, 3)
+        if n != dstlen:
+            raise RuntimeError("oodle returned {}, expected {}".format(n, dstlen))
+        return dst.raw[:dstlen]
+    return kraken.decompress(src, dstlen)

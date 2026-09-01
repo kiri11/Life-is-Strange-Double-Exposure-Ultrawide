@@ -28,15 +28,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def load_reader():
     """Import the container machinery, which is only needed to *build*.
 
-    Reading a package out of `pakchunk0` needs Oodle; reporting what is
-    installed, or removing it, needs nothing but the standard library. Keeping
-    these imports out of module scope is what lets --verify answer on a machine
-    that has no decompressor - which is exactly the machine most likely to be
-    asking why the step was skipped.
+    Reading a package out of `pakchunk0` pulls in the container readers and
+    the Kraken decoder; reporting what is installed, or removing it, needs
+    nothing but the standard library, and a fault in the readers must never
+    stop someone putting their game back.
     """
-    global ctr, Toc, load_script_objects, ZenPackage, decode_slot
+    global ctr, Toc, load_script_objects, ZenPackage, decode_slot, KrakenError
     import container as ctr
     from iostore import Toc, load_script_objects
+    from kraken import KrakenError
     from zen import ZenPackage
     from slots import decode_slot
 
@@ -239,10 +239,24 @@ def remove_mod(paks):
     return gone
 
 
+DECODE_FAILED = ('cannot decode %s (%s). The game data is read with the Kraken decoder '
+                 'in tools/assetdump/kraken.py; a game update may have changed how it '
+                 'is compressed. Please report this line in an issue. The full-width UI '
+                 'is not installed; the game\'s own files are untouched.')
+
+
+def read_chunk(toc, index, what):
+    """toc.read, with a decode failure turned into a one-line error naming |what|."""
+    try:
+        return toc.read(index)
+    except KrakenError as ex:
+        raise PatchError(DECODE_FAILED % (what, ex))
+
+
 def source_container_header(toc):
     for i in range(toc.entries):
         if toc.chunk_type(i) == 6:
-            return ctr.parse_container_header(toc.read(i))
+            return ctr.parse_container_header(read_chunk(toc, i, SOURCE + ' container header'))
     raise PatchError('%s has no container header - it cannot be read.' % SOURCE)
 
 
@@ -272,7 +286,7 @@ def build_mod(paks, dw, dh, script_objects):
             failed += 1
             continue
 
-        data = toc.read(idx)
+        data = read_chunk(toc, idx, name)
         pkg = ZenPackage(data, script_objects)
         buf = bytearray(data)
         notes, done = [], 0
@@ -327,7 +341,8 @@ def verify_mod(paks, by_pkg, dw, dh, script_objects):
     for pkg_path, edits in by_pkg.items():
         if pkg_path not in toc.index:
             continue
-        pkg = ZenPackage(toc.read(toc.index[pkg_path]), script_objects)
+        pkg = ZenPackage(read_chunk(toc, toc.index[pkg_path], MOD_NAME + ': ' + pkg_path),
+                         script_objects)
         for widget, field, old, newfn in edits:
             _, s, _, _ = slot_payload(pkg, widget)
             want = newfn(dw, dh)
@@ -426,7 +441,10 @@ def main():
 
     remove_mod(paks)                     # never build on top of an older one
     load_reader()
-    script_objects = load_script_objects(os.path.join(paks, 'global.utoc'))
+    try:
+        script_objects = load_script_objects(os.path.join(paks, 'global.utoc'))
+    except KrakenError as ex:
+        raise PatchError(DECODE_FAILED % ('global.utoc', ex))
     by_pkg, applied, failed = build_mod(paks, dw, dh, script_objects)
     bad = verify_mod(paks, by_pkg, dw, dh, script_objects)
 
