@@ -42,6 +42,12 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python tests/test_kraken.py -v
       - run: python tests/test_paths.py
+      - run: python tests/test_camera.py
+      # The camera loader's planner against a made-up image, once per OS
+      # since it does not depend on Python. Its test against the real
+      # executable skips itself where there is no game.
+      - if: matrix.python == '3.x'
+        run: cargo test --release --workspace
 
   build:
     needs: test
@@ -94,6 +100,17 @@ jobs:
           Select-String -Path patcher.py -Pattern '^VERSION'
           Select-String -Path LiSUltrawidePatcher.cs -Pattern 'Assembly.*Version\('
 
+      # The camera loader, stamped with the same version. Rust is on the runner
+      # already; the crate's build script wants the Windows SDK's resource
+      # compiler for the version resource, which the runner has too.
+      - name: Build the camera loader
+        shell: pwsh
+        env:
+          LIS_FIX_VERSION: ${{ env.VERSION }}
+        run: |
+          cargo build --release --workspace
+          if (-not (Test-Path target/release/lis_ultrawide_camera.dll)) { throw 'no loader DLL was built' }
+
       # The stock .NET Framework compiler, present on every Windows image and on
       # every Windows the fix targets. No SDK, no csproj, no restore step. Keep
       # this line and the one in LiSUltrawidePatcher.cs's header identical.
@@ -109,10 +126,13 @@ jobs:
       # What a user needs to run the fix, plus the one file the license needs.
       # tools/assetdump is not optional: patcher.py shells out to
       # patch_ui_layout.py for the full-width UI step, so a zip without it
-      # silently installs three of the four parts. LiSUltrawidePatcher.cs is not on the runtime path either,
-      # but it is the exe's source, and shipping it makes the archive its own
-      # corresponding source under GPL-3 section 6 - so a download from a mod
-      # site carries everything the license promises, with no link to follow.
+      # silently installs three of the four parts. The loader DLL ships under
+      # its own name; the installer copies it next to the game as winhttp.dll.
+      # LiSUltrawidePatcher.cs and the loader's crate are not on the runtime
+      # path, but they are the two binaries' source, and shipping them makes
+      # the archive its own corresponding source under GPL-3 section 6 - so a
+      # download from a mod site carries everything the license promises,
+      # with no link to follow.
       # The research scripts (audit_offsets, pak, usmap, verify_kraken,
       # make_kraken_vectors), the tests, RESEARCH.md and make_icon.py are not
       # on the runtime path and stay in the repository only.
@@ -124,7 +144,7 @@ jobs:
           $top = @(
             'LiSUltrawidePatcher.exe',   # the GUI front-end, built above
             'LiSUltrawidePatcher.cs',    # its source - the zip is GPL-complete
-            'patcher.py',                # the installer, and all the patch logic
+            'patcher.py',                # the installer
             'README.md',                 # install and troubleshooting instructions
             'LICENSE'                    # GPL-3.0: the binary must carry its terms
           )
@@ -138,6 +158,15 @@ jobs:
             'README.md'                  # what each of these files is
           )
           foreach ($f in $top) { Copy-Item $f "$root/$f" }
+          Copy-Item target/release/lis_ultrawide_camera.dll "$root/LiSUltrawideCamera.dll"
+          $crate = @('Cargo.toml', 'Cargo.lock', '.cargo/config.toml',
+                     'crates/camera/Cargo.toml', 'crates/camera/build.rs')
+          foreach ($f in $crate) {
+            New-Item -ItemType Directory -Path (Split-Path "$root/$f") -Force | Out-Null
+            Copy-Item $f "$root/$f"
+          }
+          Copy-Item -Recurse crates/camera/src "$root/crates/camera/src"
+          Copy-Item -Recurse crates/camera/tests "$root/crates/camera/tests"
           foreach ($f in $assetdump) { Copy-Item "tools/assetdump/$f" "$root/tools/assetdump/$f" }
           Compress-Archive -Path $root -DestinationPath 'LiS-DE-Ultrawide-Fix.zip'
           Get-ChildItem -Recurse $root | Select-Object FullName, Length

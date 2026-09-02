@@ -10,7 +10,8 @@
 //
 // This is deliberately a THIN front-end. It contains no patch logic of its own:
 // every option below runs patcher.py, which is the single source of truth for
-// what gets written to the executable, the game data files and Engine.ini.
+// what gets installed next to the executable, written to the game data files
+// and to Engine.ini.
 // An earlier version of this file reimplemented the byte patches in C# and
 // silently drifted out of sync with the Python one, which is exactly the bug
 // this structure prevents.
@@ -273,7 +274,8 @@ namespace LiSUltrawidePatcher
 
             chkExe = Option(opts, "Ultrawide camera",
                 "Hor+ cutscenes, dialogue and exploration - no black bars, and no "
-                + "zoom when a dialogue ends. Patches the executable.");
+                + "zoom when a dialogue ends. Installs a small library the game "
+                + "loads at start; the executable itself is not changed.");
             chkGameFiles = Option(opts, "Full-width UI",
                 "Loading screens cover the whole screen and the HUD sits on the "
                 + "real screen edge. Patches the game data files.");
@@ -618,11 +620,11 @@ namespace LiSUltrawidePatcher
             ActiveControl = btnInstall;
         }
 
-        // ---- executable status -------------------------------------------
-        // What the file currently is (stock / already patched / unrecognised)
-        // is decided by patcher.py --check-exe, which tests the very byte
-        // signatures it patches through. Keeping the answer there means the
-        // badge can never disagree with what Install would actually do.
+        // ---- camera loader status ----------------------------------------
+        // Whether the fix's loader is next to the executable, and what it
+        // reported at the last launch, is decided by patcher.py --check-exe.
+        // Keeping the answer there means the badge can never disagree with
+        // what Install would actually do.
 
         private const string GlyphOk = "\u2714";      // heavy check mark
         private const string GlyphWarn = "\u26A0";    // warning sign
@@ -735,19 +737,32 @@ namespace LiSUltrawidePatcher
         {
             switch (status)
             {
-                case "original":
-                    SetExeStatus(GlyphOk, OkColor,
-                                 "Original executable - a build this patcher knows.", detail);
+                case "installed":
+                    if (detail != null && detail.Contains("not applied"))
+                        SetExeStatus(GlyphWarn, WarnColor,
+                                     "Loader installed, but the game did not take the fix at "
+                                     + "the last launch - see LiSUltrawideCamera.log.", detail);
+                    else
+                        SetExeStatus(GlyphOk, OkColor, "Ultrawide camera loader installed.", detail);
                     break;
-                case "patched":
+                case "outdated":
                     SetExeStatus(GlyphWarn, WarnColor,
-                                 "Already patched - Install re-applies from the backup.",
-                                 detail);
+                                 "A different version of the loader is installed - Install "
+                                 + "updates it.", detail);
                     break;
-                case "unknown":
+                case "foreign":
                     SetExeStatus(GlyphWarn, WarnColor,
-                                 "Unrecognised executable - a game update, or the wrong file.",
-                                 detail);
+                                 "Another program's winhttp.dll is next to the game - the fix "
+                                 + "will not replace it.", detail);
+                    break;
+                case "none":
+                    SetExeStatus("", SystemColors.GrayText,
+                                 "Ultrawide camera loader is not installed.", detail);
+                    break;
+                case "notgame":
+                    SetExeStatus(GlyphWarn, WarnColor,
+                                 "That is not Chronos-Win64-Shipping.exe - select the game's "
+                                 + "own executable.", detail);
                     break;
                 case "missing":
                     SetExeStatus(GlyphWarn, WarnColor, "There is no file at that path.", detail);

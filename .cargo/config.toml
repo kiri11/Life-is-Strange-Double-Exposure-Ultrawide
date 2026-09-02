@@ -1,0 +1,8 @@
+# Link the C runtime in, so the loader and any later Rust binary depend on
+# nothing but Windows itself: no Visual C++ redistributable on the player's
+# machine, and no shared runtime to wait for when the game loads the DLL.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
