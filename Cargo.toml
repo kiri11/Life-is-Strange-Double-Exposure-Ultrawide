@@ -1,0 +1,11 @@
+# The Rust parts of the fix. Today that is the camera loader alone; the
+# installer is patcher.py. Build everything with `cargo build --release`.
+[workspace]
+resolver = "3"
+members = ["crates/camera"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

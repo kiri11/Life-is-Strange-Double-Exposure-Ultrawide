@@ -220,5 +220,7 @@ __marimo__/
 # the private interpreter the GUI downloads when the machine has no Python
 /tools/python/
 
-# built by .github/workflows/build.yml, and shipped only in releases
+# built by .github/workflows/build.yml, and shipped only in releases; a local
+# build of the loader goes here too, where the installer looks for it
 /LiSUltrawidePatcher.exe
+/LiSUltrawideCamera.dll

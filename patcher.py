@@ -23,7 +23,8 @@ Run it with no arguments for an interactive install, or:
 Four independent parts; the first three are on by default, part 4 is opt-in
 (--sharpen):
 
-  1. Ultrawide camera   - patches the executable (see RESEARCH.md)
+  1. Ultrawide camera   - installs a loader library next to the executable
+                          (crates/camera; see RESEARCH.md)
   2. Full-width UI      - patches the game data files via tools/assetdump
   3. Chromatic aberration off } both write a single managed block into the
   4. Anti-blur TSR settings   } user's Engine.ini, removed again by --restore
@@ -33,8 +34,6 @@ optional dependency (blake3, used only by part 2) automatically - though
 nothing needs it: without the compiled module part 2 falls back to the pure
 Python BLAKE3 in tools/assetdump/, so the stdlib alone is enough.
 
-Advanced: --mode patches only the executable, in one of the legacy modes
-(cine, horplus, hybrid, clean, full, stock). cine is the shipped behaviour.
 Compatible with Python 3.6+ (3.8+ under uv).
 """
 
@@ -54,6 +53,7 @@ import re
 import shutil
 import struct
 import sys
+import time
 
 class InstallError(Exception):
     """A problem the user can act on: reported as one line, without a traceback.
@@ -61,466 +61,6 @@ class InstallError(Exception):
     Anything that is NOT this class is a bug in the fix, and keeps its full
     traceback - that is what a useful issue report needs.
     """
-
-
-# ---------------------------------------------------------------------------
-# Patch definitions
-# ---------------------------------------------------------------------------
-
-# 11 Verified Camera Aspect Ratio float constant locations (legacy modes)
-ALL_ASPECT_OFFSETS = [
-    0x257BDEC, 0x23E5558, 0x23E5739, 0x23E665C, 0x43FEB0F,
-    0x43FEB58, 0x43FEFD1, 0x44004BF, 0x440050B, 0x4401BBF, 0x69C8A8C
-]
-
-# Legacy 2-Offset Clean Mode: Player Exploration (0x23E665C) + Photo Table (0x69C8A8C)
-CLEAN_OFFSETS = [0x23E665C, 0x69C8A8C]
-
-# --- True Hor+ mode -------------------------------------------------------
-# Rationale (see RESEARCH.md section "The Hor+ Breakthrough"):
-# UE5's FMinimalViewInfo::CalculateProjectionMatrixGivenViewRectangle already
-# contains perfect Hor+ math in its AspectRatio_MaintainYFOV branch: it derives
-# the vertical FOV from the camera's AUTHORED aspect ratio
-# (vFOV = 2*atan(tan(hFOV/2) / AspectRatio)) and then expands horizontally to
-# the real viewport. To activate it for every camera we need two code patches:
-#
-# 1) UCameraComponent::GetCameraView copies bConstrainAspectRatio from the
-#    component into the output FMinimalViewInfo. Replacing the 7-byte
-#    "movzx eax, byte [rbx+0x2B4]" with "xor eax, eax" + 5-byte NOP makes the
-#    subsequent bit-merge clear the flag instead -> no more 16:9 pillarbox
-#    constraint for ANY camera (cinematic CineCameras included, since
-#    UCineCameraComponent::GetCameraView calls Super::GetCameraView).
-#
-# 2) In CalculateProjectionMatrixGivenViewRectangle the axis-constraint enum
-#    (dl) is compared against 2 (MajorAxisFOV) and 1 (MaintainXFOV); both jump
-#    to the Vert- path. Rewriting both immediates to 0xFF makes every
-#    perspective camera fall through into the MaintainYFOV Hor+ path,
-#    regardless of LocalPlayer settings or per-camera overrides.
-#
-# The player camera aspect constant 0x23E665C must remain STOCK (1.7777778) in
-# this mode: the engine's conversion uses it as "the aspect ratio the FOV was
-# authored for". (Patching it to the monitor ratio is what caused the Vert-
-# zoom-in when leaving cutscenes in the legacy clean mode.)
-#
-# On a 16:9 monitor these patches are behavior-neutral.
-
-PATCH_UNCONSTRAIN = {
-    "name": "Unconstrain cameras (UCameraComponent::GetCameraView)",
-    # movzx eax,[rbx+2B4]; xor eax,[rdi+4C]; and eax,1  (flag copy preamble)
-    "sig": "0F B6 83 B4 02 00 00 33 47 4C 83 E0 01",
-    "expected": 0x441A14C,
-    # xor eax,eax ; nop5  (exactly 7 bytes, instruction-boundary safe)
-    "edits": [(0, bytes.fromhex("31C00F1F440000"))],
-}
-
-PATCH_AXIS = {
-    "name": "Force Hor+ MaintainYFOV branch (CalculateProjectionMatrixGivenViewRectangle)",
-    # cmp eax,ecx; jle +9; cmp dl,2; je Vert-; cmp dl,1; je Vert-
-    "sig": "3B C1 7E 09 80 FA 02 0F 84 ?? ?? ?? ?? 80 FA 01 0F 84 ?? ?? ?? ??",
-    "expected": 0x440ABC0,
-    "edits": [(6, b"\xFF"), (15, b"\xFF")],  # cmp dl,2 -> cmp dl,0xFF ; cmp dl,1 -> cmp dl,0xFF
-}
-
-# UCineCameraComponent::GetCameraView contains the ONLY direct call to
-# UCameraComponent::GetCameraView in the entire binary (every other invocation
-# is virtual, used by non-cinematic cameras):
-#   call UCameraComponent::GetCameraView   <- E8 at signature offset +13
-#   ; rdi = FMinimalViewInfo& DesiredView (non-volatile, held across the call)
-# We reroute that call through a code cave that calls the original and then
-# clears bConstrainAspectRatio (bit 0 of DesiredView+0x4C). This unconstrains
-# EVERY cinematic camera view regardless of where the flag came from
-# (constructors, cooked asset data, or Blueprint logic) while leaving all
-# non-cinematic cameras untouched.
-CINE_GCV_CALLSITE = {
-    "name": "Cine GetCameraView super-call site",
-    # call UpdateCameraLens; mov r8,rdi; movaps xmm1,xmm6; mov rcx,rbx; call Super
-    "sig": "E8 ?? ?? ?? ?? 4C 8B C7 0F 28 CE 48 8B CB E8",
-    "expected": 0x4005B78,
-    "call_at": 14,  # offset of the Super E8 within the signature
-}
-
-# cave B: sub rsp,0x28 ; call Super ; add rsp,0x28 ; or byte [rdi+0x4C],1 ; ret
-# Forces bConstrainAspectRatio=TRUE on every UCineCameraComponent view. In this
-# game cine cameras are the LOADING/transition views (field-tested v3.1: caving
-# the cine path widened loading, not cutscenes) - they must stay pillarboxed
-# even though cave A below would otherwise unconstrain their 16:9 aspect.
-CAVE_PROLOGUE = bytes.fromhex("4883EC28")
-CAVE_EPILOGUE = bytes.fromhex("4883C428" "804F4C01" "C3")
-CAVE_SIZE = len(CAVE_PROLOGUE) + 5 + len(CAVE_EPILOGUE)  # 18 bytes
-
-# --- cave A: aspect-gated unconstrain inside UCameraComponent::GetCameraView --
-# The 7-byte "movzx eax, byte [rbx+2B4]" flag-copy preamble (the site whose
-# unconditional clearing gave the field-proven great Hor+ cutscenes in v1) is
-# replaced by "call caveA ; nop2". The cave re-executes the movzx, then clears
-# bit 0 of eax ONLY when the component's AspectRatio member lies in
-# (1.75, 1.8) - i.e. cameras authored for 16:9 (the cutscene cameras).
-# Exploration/photo cameras carry the patched monitor aspect (>1.8) and square
-# capture cameras (~1.0) fall below the window, so they keep their constraint.
-# ecx is safe to clobber (reloaded immediately after the patched site).
-GATE_SITE = {
-    "name": "GetCameraView flag-copy gate site",
-    "sig": "0F B6 83 B4 02 00 00 33 47 4C 83 E0 01",
-    "expected": 0x441A14C,
-}
-# Gate: unconstrain any camera authored ~16:9 (AspectRatio in the open
-# (1.75, 1.8) window) -> cutscenes/dialogues render Hor+. Exploration and
-# photo cameras carry the patched monitor aspect (>1.8) and square capture
-# cameras (~1.0) fall below the window, so they keep their constraint.
-# Field-tested conclusion (see RESEARCH.md 4f/4g): the loading side-peek
-# CANNOT be fixed by any camera gate - during loads the game holds the next
-# scene's cutscene camera behind a 16:9-sized loading overlay, so boxing
-# loading would box cutscenes too. The range gate (rather than an exact
-# float match) is deliberate: it also widens the main menu and any cutscene
-# shots whose 16:9 aspect was serialized with slightly different float bits.
-# The upper bound is a parameter. Two settings are meaningful:
-#
-#   1.8 (default)   - only cameras authored ~16:9 are unconstrained.
-#   monitor aspect  - every camera authored NARROWER than the screen is
-#                     unconstrained ("wide gate", --wide-gate).
-#
-# The wide gate exists because leaving a dialogue does not hand over between two
-# static cameras: Deck Nine drive camera state per frame from data assets, so the
-# live component's AspectRatio member is ANIMATED from 16:9 up to the monitor
-# ratio. With the 1.8 bound the camera falls out of the gate the moment that
-# animation passes 1.8 and is pillarboxed for the rest of the move - bars at full
-# width, then shrinking to nothing as the aspect reaches the monitor ratio. That
-# sweep is the brief zoom seen when a dialogue hands control back. Carrying the
-# bound up to the monitor aspect keeps the camera unconstrained for the whole
-# animation; the exploration camera's final value - exactly the monitor aspect -
-# still lands on `jae` and stays constrained, so nothing else changes.
-GATE_DEFAULT_UPPER = bytes.fromhex("6666E63F")   # 1.8f
-
-
-# AUTHORED_ASPECT is the value pinned into the view for every camera the gate
-# unconstrains. It exists because the game animates a camera's AspectRatio when
-# it hands control back from a dialogue: the member ramps from the authored 16:9
-# up to the VIEWPORT aspect over about a second (measured - see RESEARCH 10).
-# That ramp is the game's letterbox-open animation. In stock UE it is harmless,
-# because a constrained camera takes the MaintainXFOV path where AspectRatio
-# only sizes the view RECT. Under the forced MaintainYFOV branch, AspectRatio
-# becomes the FOV divisor, so the same ramp is re-read as a vertical-FOV change:
-# the view zooms in as the ramp climbs and then snaps back when the gameplay
-# camera (still at 16:9) takes over. Pinning the divisor to the authored aspect
-# restores the rule stated in RESEARCH 2a - the divisor must be the aspect the
-# FOV was AUTHORED for - and makes the whole hand-off framing-neutral.
-AUTHORED_ASPECT = bytes.fromhex("398EE33F")      # 1.7777778f (closest float to 16/9)
-
-
-def build_cave_a(upper_bytes, pin_bytes=AUTHORED_ASPECT):
-    return (bytes.fromhex(
-        "0FB683B4020000"    # movzx eax, byte [rbx+0x2B4]
-        "8B8BB0020000"      # mov   ecx, [rbx+0x2B0]  (component AspectRatio)
-        "81F90000E03F"      # cmp   ecx, 0x3FE00000   (1.75f)
-        "7612"              # jbe   done  (+18)
-        "81F9")             # cmp   ecx, <upper bound>
-        + upper_bytes
-        + bytes.fromhex(
-        "730A"              # jae   done  (+10)
-        "83E0FE"            # and   eax, -2           (clear bConstrainAspectRatio)
-        "C74748")           # mov   dword [rdi+0x48], <authored aspect>
-        + pin_bytes
-        + bytes.fromhex(
-        "C3"))              # done: ret
-
-
-def apply_aspect_gate_cave(data, upper_bytes=GATE_DEFAULT_UPPER):
-    cave_a = build_cave_a(upper_bytes)
-    site = locate(data, GATE_SITE)
-    cave = find_code_cave(data, len(cave_a) + 8)
-    data[cave:cave + len(cave_a)] = cave_a
-    patch = b"\xE8" + struct.pack("<i", cave - (site + 5)) + b"\x66\x90"
-    data[site:site + 7] = patch
-    print("  patched: aspect-gated unconstrain cave @ {:#x} "
-          "(GetCameraView site {:#x}, gate upper bound {:.6f})".format(
-              cave, site, struct.unpack("<f", upper_bytes)[0]))
-
-
-def find_text_section(data):
-    pe_off = struct.unpack_from("<I", data, 0x3C)[0]
-    num_sections = struct.unpack_from("<H", data, pe_off + 6)[0]
-    opt_size = struct.unpack_from("<H", data, pe_off + 20)[0]
-    sec_off = pe_off + 24 + opt_size
-    for i in range(num_sections):
-        o = sec_off + i * 40
-        if data[o:o+8].rstrip(b"\0") == b".text":
-            vsize, va, rawsize, rawptr = struct.unpack_from("<IIII", data, o + 8)
-            return rawptr, rawsize
-    raise RuntimeError(".text section not found")
-
-
-def find_code_cave(data, need):
-    """First int3 (0xCC) padding run in .text large enough to host the cave."""
-    lo, size = find_text_section(data)
-    hi = lo + size
-    i = lo
-    run = b"\xCC" * need
-    while True:
-        i = data.find(run, i, hi)
-        if i == -1:
-            raise RuntimeError("no int3 code cave of {} bytes found".format(need))
-        # use only runs that start on an instruction boundary after a previous
-        # run byte or function end; starting at the first CC of the run is safe
-        if data[i - 1] != 0xCC:
-            return i
-        i += 1
-
-
-def apply_cine_gcv_cave(data):
-    site = locate(data, CINE_GCV_CALLSITE)
-    call_off = site + CINE_GCV_CALLSITE["call_at"]
-    if data[call_off] != 0xE8:
-        raise RuntimeError("cine GetCameraView call site: expected E8")
-    old_disp = struct.unpack_from("<i", data, call_off + 1)[0]
-    super_off = call_off + 5 + old_disp  # file offset == VA delta within .text
-    cave = find_code_cave(data, CAVE_SIZE + 8)
-    # cave layout: prologue, call Super (rel32 from cave), epilogue
-    cave_call_off = cave + len(CAVE_PROLOGUE)
-    rel_to_super = super_off - (cave_call_off + 5)
-    blob = CAVE_PROLOGUE + b"\xE8" + struct.pack("<i", rel_to_super) + CAVE_EPILOGUE
-    data[cave:cave + len(blob)] = blob
-    # reroute the original call to the cave
-    struct.pack_into("<i", data, call_off + 1, cave - (call_off + 5))
-    print("  patched: cine GetCameraView rerouted via cave @ {:#x} "
-          "(super call at {:#x} -> original target {:#x})".format(
-              cave, call_off, super_off))
-
-
-PATCH_CINE_UNCONSTRAIN = {
-    "name": "Unconstrain cinematic cameras only (UCineCameraComponent ctor)",
-    # or [rdi+3A],2 ; xor eax,eax ; or [rdi+8A],2 ; or [rdi+2B4],1  <- imm of the
-    # last OR is bConstrainAspectRatio=true in the CineCameraComponent constructor
-    "sig": "80 4F 3A 02 33 C0 80 8F 8A 00 00 00 02 80 8F B4 02 00 00 01",
-    "expected": 0x40049E9,
-    "edits": [(19, b"\x00")],  # or byte [rdi+2B4], 1 -> or byte [rdi+2B4], 0 (no-op)
-}
-
-HORPLUS_PATCHES = [PATCH_UNCONSTRAIN, PATCH_AXIS]
-
-# Photo projection static float table (shared by all modes): DF7CDB3D 5555553F <AR>
-PHOTO_TABLE = {
-    "name": "Photo projection table",
-    "sig": "DF 7C DB 3D 55 55 55 3F 39 8E E3 3F",
-    "expected": 0x69C8A84,
-    "float_at": 8,
-}
-
-PRESETS = {
-    "1": ("5120x2160 (21:9 WUHD 4K)", 5120, 2160),
-    "2": ("3440x1440 (21:9 UWQHD)", 3440, 1440),
-    "3": ("2560x1080 (21:9 UWD)", 2560, 1080),
-    "4": ("3840x1600 (24:10 UW)", 3840, 1600),
-    "5": ("5120x1440 (32:9 Super Ultrawide)", 5120, 1440),
-    "6": ("3840x1080 (32:9 Super Ultrawide)", 3840, 1080),
-    "7": ("7680x2160 (32:9 Super Ultrawide)", 7680, 2160),
-    "8": ("3840x1200 (32:10)", 3840, 1200),
-}
-
-# ---------------------------------------------------------------------------
-# Signature scanning
-# ---------------------------------------------------------------------------
-
-def parse_sig(sig):
-    """'0F B6 ?? 02' -> (bytes, mask) where mask byte 0 = wildcard."""
-    parts = sig.split()
-    pat = bytearray()
-    mask = bytearray()
-    for p in parts:
-        if p == "??":
-            pat.append(0)
-            mask.append(0)
-        else:
-            pat.append(int(p, 16))
-            mask.append(1)
-    return bytes(pat), bytes(mask)
-
-
-def masked_find_all(data, pat, mask, limit=4):
-    """Find all offsets matching the masked pattern (bounded)."""
-    anchor = None
-    for i, m in enumerate(mask):
-        if m:
-            anchor = i
-            break
-    results = []
-    start = 0
-    first_byte = pat[anchor:anchor + 1]
-    while len(results) < limit:
-        i = data.find(first_byte, start + anchor)
-        if i == -1:
-            break
-        base = i - anchor
-        start = base + 1
-        if base < 0 or base + len(pat) > len(data):
-            continue
-        ok = True
-        for j in range(len(pat)):
-            if mask[j] and data[base + j] != pat[j]:
-                ok = False
-                break
-        if ok:
-            results.append(base)
-    return results
-
-
-def locate(data, spec):
-    """Locate a patch site: prefer the known offset if its bytes match,
-    otherwise fall back to a unique signature scan (game-update resilience)."""
-    pat, mask = parse_sig(spec["sig"])
-    exp = spec["expected"]
-    window = data[exp:exp + len(pat)]
-    if len(window) == len(pat) and all(
-            (not mask[j]) or window[j] == pat[j] for j in range(len(pat))):
-        return exp
-    hits = masked_find_all(data, pat, mask)
-    if len(hits) == 1:
-        print("  note: '{}' moved to file offset {:#x} (game update?)".format(
-            spec["name"], hits[0]))
-        return hits[0]
-    if not hits:
-        raise InstallError(
-            "this is not a build of the game the fix knows - the code it "
-            "patches ('{}') is not in this executable. After a game update the "
-            "fix needs updating too; please report it.".format(spec["name"]))
-    raise InstallError(
-        "the code site '{}' matches in {} places, so the fix cannot tell which "
-        "one to patch. Please report this.".format(spec["name"], len(hits)))
-
-# ---------------------------------------------------------------------------
-# Checking an executable
-# ---------------------------------------------------------------------------
-# The same signatures the patcher writes through also identify what a given
-# executable currently is, which is all the front-ends need to show a status:
-# every patched site is recognisable in both its stock and its patched form.
-
-# PATCH_AXIS applied: both "cmp dl,<enum>" immediates rewritten to 0xFF
-AXIS_PATCHED_SIG = ("3B C1 7E 09 80 FA FF 0F 84 ?? ?? ?? ?? "
-                    "80 FA FF 0F 84 ?? ?? ?? ??")
-# cave A applied: the flag-copy preamble replaced by "call caveA ; nop2"
-GATE_CAVE_SIG = "E8 ?? ?? ?? ?? 66 90 33 47 4C 83 E0 01"
-# legacy horplus/clean modes: the same preamble replaced by "xor eax,eax ; nop5"
-GATE_HORPLUS_SIG = "31 C0 0F 1F 44 00 00 33 47 4C 83 E0 01"
-
-# offsets inside the cave A blob built by build_cave_a()
-CAVE_A_UPPER_AT = 23
-CAVE_A_PIN_AT = 35
-
-STOCK_AUTHORED_ASPECT = 16.0 / 9.0
-
-
-def _matches_at(data, sig, offset):
-    pat, mask = parse_sig(sig)
-    window = data[offset:offset + len(pat)]
-    return len(window) == len(pat) and all(
-        (not mask[j]) or window[j] == pat[j] for j in range(len(pat)))
-
-
-def _find_sig(data, sig, expected=None):
-    """Offset of the first match, expected offset first; None if absent."""
-    if expected is not None and _matches_at(data, sig, expected):
-        return expected
-    pat, mask = parse_sig(sig)
-    hits = masked_find_all(data, pat, mask, limit=1)
-    return hits[0] if hits else None
-
-
-def _float_at(data, offset):
-    try:
-        return struct.unpack_from("<f", data, offset)[0]
-    except struct.error:
-        return None
-
-
-def _cave_a_gate(data, call_site):
-    """Gate bound and pinned aspect of an installed cave A, or (None, None)."""
-    rel = struct.unpack_from("<i", data, call_site + 1)[0]
-    cave = call_site + 5 + rel
-    if cave < 0 or cave + 40 > len(data):
-        return None, None
-    return (_float_at(data, cave + CAVE_A_UPPER_AT),
-            _float_at(data, cave + CAVE_A_PIN_AT))
-
-
-def _site_state(data, expected, variants):
-    """{label: offset} for the one variant a patch site is currently in.
-
-    Every variant is tried at the site's known offset before anything is
-    scanned for, so the common cases cost nothing.
-    """
-    for label, sig in variants:
-        if _matches_at(data, sig, expected):
-            return {label: expected}
-    for label, sig in variants:
-        hit = _find_sig(data, sig)
-        if hit is not None:
-            return {label: hit}
-    return {}
-
-
-def check_exe(exe_path):
-    """Classify an executable as (status, detail).
-
-    status is one of:
-      "original" - stock, and a build whose code this patcher recognises
-      "patched"  - this fix is installed
-      "unknown"  - the signatures are not there: a game update, or not the
-                   game's executable at all
-      "missing"  - nothing readable at that path
-    """
-    if not exe_path or not os.path.isfile(exe_path):
-        return "missing", "there is no file at that path"
-    try:
-        with open(exe_path, "rb") as f:
-            data = f.read()
-    except (IOError, OSError) as exc:
-        return "missing", "cannot read the file ({})".format(exc)
-    if data[:2] != b"MZ":
-        return "unknown", "not a Windows executable"
-
-    axis = _site_state(data, PATCH_AXIS["expected"],
-                       (("stock", PATCH_AXIS["sig"]),
-                        ("patched", AXIS_PATCHED_SIG)))
-    gate = _site_state(data, GATE_SITE["expected"],
-                       (("stock", GATE_SITE["sig"]),
-                        ("cave", GATE_CAVE_SIG),
-                        ("horplus", GATE_HORPLUS_SIG)))
-    axis_stock, axis_done = axis.get("stock"), axis.get("patched")
-    gate_stock = gate.get("stock")
-    gate_cave, gate_horplus = gate.get("cave"), gate.get("horplus")
-
-    # legacy clean/full modes only rewrote aspect-ratio constants
-    authored = _float_at(data, 0x23E665C)
-    constants_touched = (authored is not None
-                         and abs(authored - STOCK_AUTHORED_ASPECT) > 1e-6)
-
-    if not (axis_stock or axis_done) or not (gate_stock or gate_cave or gate_horplus):
-        return "unknown", ("the code this patcher works on is not in this file - "
-                           "a game update, or not the game's executable")
-
-    backup = " (an .original backup is present)" if \
-        os.path.exists(exe_path + ".original") else ""
-
-    parts = []
-    if axis_done:
-        parts.append("forced Hor+ projection branch")
-    if gate_cave:
-        upper, pin = _cave_a_gate(data, gate_cave)
-        if upper:
-            # the installer sets the bound to max(aspect, 1.8) * 1.002
-            parts.append("aspect gate up to {:.4f} (~{:.2f}:1)".format(
-                upper, upper / 1.002))
-        else:
-            parts.append("aspect gate cave")
-        if pin and abs(pin - STOCK_AUTHORED_ASPECT) > 1e-6:
-            parts.append("FOV divisor pinned to {:.4f}".format(pin))
-    if gate_horplus:
-        parts.append("cameras unconstrained (legacy Hor+ mode)")
-    if constants_touched:
-        parts.append("aspect constants rewritten to {:.4f} (legacy mode)".format(
-            authored))
-    if parts:
-        return "patched", "already patched: " + ", ".join(parts) + backup
-
-    return "original", "stock executable, and a build this patcher knows" + backup
 
 
 # ---------------------------------------------------------------------------
@@ -761,44 +301,129 @@ def _generic_candidates():
 
 
 # ---------------------------------------------------------------------------
-# Patching
+# Ultrawide camera - the loader library
 # ---------------------------------------------------------------------------
-
-def apply_edits(data, spec):
-    base = locate(data, spec)
-    for rel, payload in spec["edits"]:
-        data[base + rel:base + rel + len(payload)] = payload
-    print("  patched: {} @ {:#x}".format(spec["name"], base))
-
-
-def patch_photo_table(data, target_bytes):
-    base = locate(data, PHOTO_TABLE)
-    off = base + PHOTO_TABLE["float_at"]
-    data[off:off + 4] = target_bytes
-    print("  patched: {} @ {:#x}".format(PHOTO_TABLE["name"], off))
-
-
-# ---------------------------------------------------------------------------
-# Backups, and the build they belong to
-# ---------------------------------------------------------------------------
-# A backup is only a backup of the game you have right now. Steam replaces the
-# executable on every game update, and writing the previous build's file back
-# over the new one would quietly downgrade the game. So before anything is
-# restored from a backup, the backup is checked against the build that is
-# actually installed. (The full-width UI has no backup to check: it adds a mod
-# container next to the game's data and never edits a shipped file.)
+# The camera fix is applied to the game's code in memory, at every launch, by
+# a small library the game loads by itself. It is installed as winhttp.dll
+# next to the game executable: the game imports a DLL of that name, and
+# Windows looks for it in the game's own folder first. (Not winhttp.dll, the
+# usual choice for this: Windows' compatibility shim engine, active as soon
+# as a player sets any compatibility option on the executable, loads the
+# System32 winhttp.dll before the game's imports are resolved, and the game
+# then reuses that copy.) The library forwards the real winhttp.dll's
+# functions to the system copy and, before the game's
+# own code runs, finds the three patch sites by signature and writes the bytes
+# RESEARCH.md describes. The executable on disk is never modified, so Steam's
+# Verify Integrity, game updates and reinstalls leave the fix in place, and
+# there is nothing to back up or restore.
 #
-# The executable needs no bookkeeping for this: the fix only ever rewrites bytes
-# in place, so a stock executable and that same executable after the fix has run
-# share their size and their PE header. A build the backup does not belong to
-# differs there.
+# The library reports what it did in LiSUltrawideCamera.log next to itself.
+# That is the only place the installer can learn whether the game's build is
+# one the fix knows: the signatures live in the library (crates/camera), not
+# here.
+
+DLL_SHIPPED = "LiSUltrawideCamera.dll"      # in the fix's own folder
+DLL_INSTALLED = "winhttp.dll"               # next to the game executable
+DLL_MARKER = "LiSUltrawideCamera".encode("utf-16-le")  # in its version resource
+CAMERA_INI = "LiSUltrawideCamera.ini"
+CAMERA_LOG = "LiSUltrawideCamera.log"
+# The per-application override winecfg would write, as it appears in user.reg.
+WINE_OVERRIDE_KEY = "Software\\\\Wine\\\\AppDefaults\\\\" + EXE_NAME + "\\\\DllOverrides"
+WINE_OVERRIDE_VALUE = '"winhttp"="native,builtin"'
+
+VERIFY_HINT = ("Use Steam's 'Verify Integrity of Game Files' (right-click the "
+               "game, Properties, Installed Files) to put a stock executable "
+               "back, then run this again.")
+
+
+def shipped_dll():
+    """The loader next to this script, or None if the download is incomplete."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DLL_SHIPPED)
+    return path if os.path.isfile(path) else None
+
+
+def is_our_dll(path):
+    """Does this file carry the loader's name in its version resource?
+
+    A winhttp.dll next to the game could also be some other mod's loader, and
+    the fix must neither overwrite nor delete that one.
+    """
+    try:
+        with open(path, "rb") as f:
+            return DLL_MARKER in f.read()
+    except (IOError, OSError):
+        return False
+
+
+def same_bytes(a, b):
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                x, y = fa.read(1 << 20), fb.read(1 << 20)
+                if x != y:
+                    return False
+                if not x:
+                    return True
+    except (IOError, OSError):
+        return False
+
+
+def camera_paths(exe_path):
+    """(installed loader, its ini, its log), all next to the game executable."""
+    win64 = os.path.dirname(os.path.abspath(exe_path))
+    return (os.path.join(win64, DLL_INSTALLED), os.path.join(win64, CAMERA_INI),
+            os.path.join(win64, CAMERA_LOG))
+
+
+def last_launch(log_path):
+    """The loader's verdict from the last launch, or None if it has not run."""
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [line.strip() for line in f if line.strip()]
+    except (IOError, OSError):
+        return None
+    for line in reversed(lines):
+        if line.startswith(("applied", "not applied")):
+            return line
+    return lines[-1] if lines else None
+
+
+def check_camera(exe_path):
+    """Classify the camera part as (status, detail). status is one of:
+
+      "installed" - the loader next to the game is the one shipped here
+      "outdated"  - it is this fix's loader, but not the version shipped here
+      "foreign"   - some other program's winhttp.dll is there; never touched
+      "none"      - not installed
+      "notgame"   - the path is not the game's executable
+      "missing"   - nothing readable at that path
+    """
+    if not exe_path or not os.path.isfile(exe_path):
+        return "missing", "there is no file at that path"
+    if os.path.basename(exe_path).lower() != EXE_NAME.lower():
+        return "notgame", "that is not {} - select the game's own executable".format(EXE_NAME)
+    dll, ini, log = camera_paths(exe_path)
+    if not os.path.isfile(dll):
+        return "none", "not installed"
+    if not is_our_dll(dll):
+        return "foreign", ("another program's winhttp.dll is next to the game, "
+                           "and the fix will not replace it")
+    launch = last_launch(log)
+    tail = (" - last launch: " + launch) if launch \
+        else " - the game has not been started since"
+    shipped = shipped_dll()
+    if shipped and not same_bytes(dll, shipped):
+        return "outdated", "a different version of the loader is installed" + tail
+    return "installed", "loader installed" + tail
 
 
 def build_identity(path):
     """(file size, PE timestamp, image size) - or None if it is not a PE file.
 
-    Unchanged by this patcher, changed by a game update: which is exactly what
-    makes it a usable "is this still the same build?" test.
+    What tells one build of the game from another: the old in-place patch kept
+    both, so it says whether a backup belongs to the executable next to it.
     """
     try:
         with open(path, "rb") as f:
@@ -817,99 +442,6 @@ def build_identity(path):
             struct.unpack_from("<I", head, pe + 24 + 56)[0])  # SizeOfImage
 
 
-def backup_state(exe_path):
-    """-> ("none" | "valid" | "stale", backup path)."""
-    backup = exe_path + ".original"
-    if not os.path.isfile(backup):
-        return "none", backup
-    mine, theirs = build_identity(exe_path), build_identity(backup)
-    if mine is None or theirs is None:
-        return "stale", backup
-    return ("valid" if mine == theirs else "stale"), backup
-
-
-def archive_stale(backup):
-    """Move a backup of some other build aside - never delete it. -> new path."""
-    for n in range(1, 100):
-        target = "{}.old{}".format(backup, "" if n == 1 else n)
-        if not os.path.exists(target):
-            try:
-                os.rename(backup, target)
-            except (IOError, OSError) as ex:
-                raise InstallError(
-                    "{} was taken from a different build of the game and has to "
-                    "be moved aside, but that failed ({}). Move or delete it by "
-                    "hand and run this again."
-                    .format(os.path.basename(backup), ex))
-            return target
-    raise InstallError("there are too many old backups next to {} - please "
-                       "tidy them up.".format(os.path.basename(backup)))
-
-
-VERIFY_HINT = ("Use Steam's 'Verify Integrity of Game Files' (right-click the "
-               "game, Properties, Installed Files) to put a stock executable "
-               "back, then run this again.")
-
-
-def ensure_exe_backup(exe_path):
-    """A backup that really is the stock executable of the installed build.
-
-    This refuses rather than guesses: a backup taken from an already-patched
-    executable would make Restore a no-op for ever, and one left over from a
-    previous build would downgrade the game on the next install.
-    """
-    state, backup = backup_state(exe_path)
-    if state == "valid":
-        return backup
-
-    status = check_exe(exe_path)[0]
-    if state == "stale":
-        if status != "original":
-            raise InstallError(
-                "the backup next to the game was taken from a different build "
-                "of it, and this executable is not a stock one either, so there "
-                "is nothing safe to patch from. " + VERIFY_HINT)
-        archived = archive_stale(backup)
-        print("The backup belonged to an older build of the game - set aside as "
-              "{} and re-taken.".format(os.path.basename(archived)))
-    elif status == "patched":
-        raise InstallError(
-            "this executable is already patched but its .original backup is "
-            "gone, so there are no stock bytes left to patch from. "
-            + VERIFY_HINT)
-
-    try:
-        shutil.copy2(exe_path, backup)
-    except (IOError, OSError) as ex:
-        raise InstallError(write_failure(backup, ex))
-    print("Created original backup: {}".format(os.path.basename(backup)))
-    return backup
-
-
-def restore_exe(exe_path):
-    """Put the stock executable back, or explain why that cannot be done."""
-    state, backup = backup_state(exe_path)
-
-    if state == "valid":
-        print("\nRestoring the original stock 16:9 executable...")
-        with open(backup, "rb") as f:
-            write_exe(exe_path, f.read())
-        return True
-
-    if check_exe(exe_path)[0] == "original":
-        if state == "stale":
-            archive_stale(backup)
-        print("\nThe executable is already the stock one - nothing to restore.")
-        return True
-
-    raise InstallError(
-        ("the backup next to the game belongs to a different build of it"
-         if state == "stale" else
-         "there is no .original backup next to the game")
-        + ", and this executable is not stock, so the fix cannot restore it. "
-        + VERIFY_HINT)
-
-
 def write_failure(path, ex):
     """Turn a write error into something the person at the keyboard can fix."""
     win = getattr(ex, "winerror", None)
@@ -926,102 +458,57 @@ def write_failure(path, ex):
     return "could not write {} ({}).".format(path, ex)
 
 
-def write_exe(exe_path, data):
-    """Write through a temporary file, so a failure never leaves half an exe."""
-    tmp_path = exe_path + ".tmp"
+def replace_file(path, data):
+    """Write through a temporary file, so a failure never leaves half a file."""
+    tmp_path = path + ".tmp"
     try:
         with open(tmp_path, "wb") as f:
             f.write(data)
-        os.replace(tmp_path, exe_path)
+        os.replace(tmp_path, path)
     except (IOError, OSError) as ex:
         try:
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
         except (IOError, OSError):
             pass
-        raise InstallError(write_failure(exe_path, ex))
-    print("Successfully updated {}!".format(os.path.basename(exe_path)))
+        raise InstallError(write_failure(path, ex))
 
 
-def patch_exe(exe_path, width, height, mode, gate_upper_aspect=None):
-    if mode == "stock":
-        return restore_exe(exe_path)
+def retire_exe_patch(exe_path):
+    """Undo what versions before 2026.09 did to the executable itself.
 
-    backup_path = ensure_exe_backup(exe_path)
-    # Always start from the checked backup, so modes and re-runs never stack.
-    with open(backup_path, "rb") as f:
-        data = bytearray(f.read())
-
-    ratio = float(width) / float(height)
-    target_bytes = struct.pack("<f", ratio)
-    hex_str = " ".join("{:02X}".format(b) for b in target_bytes)
-    print("\nTarget Resolution: {}x{}".format(width, height))
-    print("Target Aspect Ratio: {:.6f} (Hex: {})".format(ratio, hex_str))
-
-    if mode == "cine":
-        # Recommended. Three code changes, no aspect-ratio CONSTANTS at all:
-        #
-        #   1. force the Hor+ MaintainYFOV projection branch;
-        #   2. cave A - unconstrain every camera authored narrower than the
-        #      display, and pin the FOV divisor to the authored 16:9;
-        #   3. cave B - keep the cine (loading/transition) views boxed.
-        #
-        # The aspect constants at 0x23E665C and the photo table are left
-        # STOCK. Runtime measurement (RESEARCH 10) showed they do not govern
-        # the cameras the old comment claimed: free-roam already renders Hor+
-        # through cave A, and the photo pipeline is bit-identical to vanilla
-        # when both constants keep their shipped 16:9 values. Patching them
-        # only desynchronised the dialogue hand-off.
-        apply_edits(data, PATCH_AXIS)
-        gate_upper = struct.pack("<f", gate_upper_aspect
-                                 or round(max(ratio, 1.8) * 1.002, 4))
-        apply_aspect_gate_cave(data, gate_upper)
-        apply_cine_gcv_cave(data)
-        print("Applied Cine Hor+ Patch: true Hor+ ultrawide everywhere "
-              "(0% vertical crop) with unskewed photos and boxed loading "
-              "views - no zoom or snap when a dialogue hands control back.")
-    elif mode == "horplus":
-        for spec in HORPLUS_PATCHES:
-            apply_edits(data, spec)
-        patch_photo_table(data, target_bytes)
-        # 0x23E665C intentionally stays STOCK (authored aspect feeds the
-        # engine's Hor+ FOV conversion).
-        print("Applied True Hor+ Patch: full-width rendering everywhere with "
-              "0% vertical crop (cutscenes, dialogues, exploration) + "
-              "no zoom jump after cutscenes.")
-        print("NOTE: photo mode and loading views are also unconstrained in "
-              "this mode; use --mode hybrid + the UE4SS UltrawideCameraFix "
-              "mod to keep those pillarboxed 16:9.")
-    elif mode == "hybrid":
-        # Hybrid mode (recommended when UE4SS is installed):
-        # - exe only forces the Hor+ MaintainYFOV branch (neutral for
-        #   constrained cameras; also fixes the sequencer MaintainXFOV leak)
-        # - the UE4SS Lua mod decides at runtime WHICH cameras are
-        #   unconstrained: cutscenes/exploration Hor+, while photo mode and
-        #   the post-load grace period stay pillarboxed 16:9.
-        # - photo table stays STOCK: constrained photo mode is then
-        #   bit-identical to vanilla -> photos can never skew.
-        apply_edits(data, PATCH_AXIS)
-        print("Applied Hybrid Patch: Hor+ projection branch forced in the exe; "
-              "camera constraint control delegated to the UE4SS "
-              "UltrawideCameraFix mod. Photo table left stock.")
-    elif mode == "clean":
-        for off in CLEAN_OFFSETS:
-            data[off:off + 4] = target_bytes
-        print("Applied Legacy Clean Patch: ultrawide exploration + unskewed "
-              "photos + pillarboxed 16:9 cutscenes.")
-    elif mode == "full":
-        for off in ALL_ASPECT_OFFSETS:
-            data[off:off + 4] = target_bytes
-        print("Applied Legacy Full Patch: all 11 locations (edge-to-edge with "
-              "~20% vertical crop).")
+    Those versions edited Chronos-Win64-Shipping.exe in place and kept the
+    stock file next to it as .exe.original. The stock file goes back and the
+    backup goes, because the loader patches the game in memory and refuses an
+    executable that is already patched on disk.
+    """
+    backup = exe_path + ".original"
+    if not os.path.isfile(backup):
+        return
+    name = os.path.basename(backup)
+    theirs = build_identity(backup)
+    if theirs is None or theirs != build_identity(exe_path):
+        print("  note: {} belongs to a different build of the game; it is not "
+              "needed any more and can be deleted".format(name))
+        return
+    if same_bytes(exe_path, backup):
+        print("  the executable is already the stock one")
     else:
-        raise ValueError("unknown mode: " + mode)
+        print("  an older version of this fix edited the executable - putting "
+              "the stock file back from {}".format(name))
+        with open(backup, "rb") as f:
+            replace_file(exe_path, f.read())
+    try:
+        os.remove(backup)
+        print("  removed {} - the loader needs no backup".format(name))
+    except (IOError, OSError) as ex:
+        print("  note: could not remove {} ({}) - it can be deleted by hand"
+              .format(name, ex))
 
-    write_exe(exe_path, data)
 
-    # The exe patch is self-contained: disable SUWSF so it cannot re-apply
-    # in-memory aspect patches on top (it would poison Hor+ mode's math).
+def disable_suwsf(exe_path):
+    """SUWSF would re-apply in-memory aspect patches on top of the fix and
+    poison its Hor+ maths; if it is there, it is switched off."""
     ini_path = os.path.join(os.path.dirname(exe_path), "SUWSF.ini")
     try:
         if os.path.isfile(ini_path):
@@ -1031,14 +518,188 @@ def patch_exe(exe_path, width, height, mode, gate_upper_aspect=None):
                 content = content.replace("Enabled=true", "Enabled=false")
                 with open(ini_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                print("Disabled conflicting SUWSF.ini in-memory patches.")
+                print("  disabled conflicting SUWSF.ini in-memory patches")
     except (IOError, OSError) as ex:
         print("  note: could not disable SUWSF.ini ({}) - if you have that "
               "tool, turn it off by hand.".format(ex))
 
-# ---------------------------------------------------------------------------
-# CLI / interactive
-# ---------------------------------------------------------------------------
+
+def wine_prefix(exe_path, engine_ini=None):
+    """The Proton or Wine prefix the game runs in: --engine-ini's, else the
+    one Steam keeps for the game. None before the game has been started once.
+    """
+    if engine_ini:
+        path = os.path.abspath(engine_ini)
+        while True:
+            parent = os.path.dirname(path)
+            if parent == path:
+                return None
+            if os.path.basename(path).lower() == "drive_c":
+                return parent
+            path = parent
+    libraries = []
+    library = _library_of(exe_path)
+    if library:
+        libraries.append(library)
+    libraries += _steam_libraries()
+    for library in libraries:
+        pfx = _proton_prefix(library)
+        if os.path.isfile(os.path.join(pfx, "user.reg")):
+            return pfx
+    return None
+
+
+def set_wine_dll_override(text, remove=False):
+    """user.reg with winhttp.dll set to native for the game, or without that.
+
+    Wine loads its own winhttp.dll unless told otherwise. This is the
+    per-application override winecfg would write, scoped to the game's
+    executable so nothing else in the prefix is affected. The file is
+    line-based: a key is a "[path] time" line, then its values, up to a blank
+    line; everything else is left exactly as it was.
+    """
+    lines = text.split("\n")
+    header = "[" + WINE_OVERRIDE_KEY + "]"
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith(header) and line[len(header):len(header) + 1] in ("", " "):
+            start = i
+            break
+    if start is None:
+        if remove:
+            return text
+        if text and not text.endswith("\n"):
+            text += "\n"
+        return (text + "\n" + header + " " + str(int(time.time())) + "\n"
+                + WINE_OVERRIDE_VALUE + "\n")
+    end = start + 1
+    while end < len(lines) and lines[end] != "" and not lines[end].startswith("["):
+        end += 1
+    body = [l for l in lines[start + 1:end] if not l.startswith('"winhttp"=')]
+    if remove:
+        if any(l.startswith('"') for l in body):
+            lines[start:end] = [lines[start]] + body
+        else:
+            # the key held nothing else: drop it and the blank line after it
+            if end < len(lines) and lines[end] == "":
+                end += 1
+            del lines[start:end]
+        return "\n".join(lines)
+    if WINE_OVERRIDE_VALUE in lines[start + 1:end]:
+        return text
+    lines[start:end] = [lines[start]] + body + [WINE_OVERRIDE_VALUE]
+    return "\n".join(lines)
+
+
+def game_is_running():
+    """Linux: is the game's process alive? Wine writes its registry back when
+    it shuts down, over anything changed in the file while it ran."""
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            with open("/proc/{}/cmdline".format(pid), "rb") as f:
+                if EXE_NAME.lower().encode() in f.read().lower():
+                    return True
+    except (IOError, OSError):
+        pass
+    return False
+
+
+def wine_dll_override(exe_path, engine_ini=None, remove=False):
+    """Tell the game's Wine prefix to load the fix's winhttp.dll, or stop."""
+    pfx = wine_prefix(exe_path, engine_ini)
+    if pfx is None:
+        if remove:
+            return
+        print("  !! no Proton prefix found for the game, so Wine does not know to")
+        print("     load the fix yet. Start the game once through Steam, quit, and")
+        print("     run Install again - or add this to the game's launch options:")
+        print('       WINEDLLOVERRIDES="version=n,b" %command%')
+        return
+    reg = os.path.join(pfx, "user.reg")
+    if game_is_running():
+        raise InstallError("the game is running - quit it and run this again "
+                           "(Wine would overwrite the registry change when it exits)")
+    try:
+        with open(reg, "r", encoding="utf-8", errors="surrogateescape") as f:
+            text = f.read()
+    except (IOError, OSError) as ex:
+        raise InstallError("could not read {} ({})".format(reg, ex))
+    new = set_wine_dll_override(text, remove)
+    if new == text:
+        print("  Wine prefix: winhttp.dll {} already".format(
+            "not overridden" if remove else "set to native for the game"))
+        return
+    replace_file(reg, new.encode("utf-8", "surrogateescape"))
+    print("  Wine prefix: winhttp.dll {} in {}".format(
+        "override removed" if remove else "set to native for the game", reg))
+
+
+def install_camera(exe_path, width, height, explicit, engine_ini=None):
+    """Put the loader next to the game and, under Proton, register it with Wine.
+
+    |explicit| says the resolution was chosen by hand rather than detected:
+    then it is written to the loader's ini, otherwise the loader reads the
+    primary display itself at every launch, so a new monitor needs no reinstall.
+    """
+    shipped = shipped_dll()
+    if shipped is None:
+        raise InstallError("{} is not next to this program - the download is "
+                           "incomplete".format(DLL_SHIPPED))
+    retire_exe_patch(exe_path)
+    dll, ini, log = camera_paths(exe_path)
+    if os.path.isfile(dll) and not is_our_dll(dll):
+        raise InstallError(
+            "there is already a winhttp.dll next to the game that is not this "
+            "fix's - another mod's loader, probably. The fix needs that name; "
+            "move the other file away and run this again.")
+    if os.path.isfile(dll) and same_bytes(dll, shipped):
+        print("  loader already in place: {}".format(dll))
+    else:
+        with open(shipped, "rb") as f:
+            replace_file(dll, f.read())
+        print("  installed the loader as {}".format(dll))
+    if explicit:
+        replace_file(ini, (
+            "; Written by the LiS Ultrawide Fix installer. Without this file the\n"
+            "; loader reads the primary display's resolution at every launch.\n"
+            "Width={}\nHeight={}\n".format(width, height)).encode("utf-8"))
+        print("  {}: {}x{}".format(CAMERA_INI, width, height))
+    elif os.path.isfile(ini):
+        os.remove(ini)
+        print("  removed {} - the loader reads the display at launch".format(CAMERA_INI))
+    if os.path.isfile(log):
+        try:
+            os.remove(log)             # the next launch writes a fresh one
+        except (IOError, OSError):
+            pass
+    if os.name != "nt":
+        wine_dll_override(exe_path, engine_ini)
+    disable_suwsf(exe_path)
+
+
+def remove_camera(exe_path, engine_ini=None):
+    retire_exe_patch(exe_path)
+    dll, ini, log = camera_paths(exe_path)
+    if os.path.isfile(dll):
+        if is_our_dll(dll):
+            try:
+                os.remove(dll)
+            except (IOError, OSError) as ex:
+                raise InstallError(write_failure(dll, ex))
+            print("  removed the loader {}".format(dll))
+        else:
+            print("  left alone: the winhttp.dll next to the game is not this fix's")
+    for path in (ini, log):
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except (IOError, OSError):
+                pass
+    if os.name != "nt":
+        wine_dll_override(exe_path, engine_ini, remove=True)
+
 
 # ---------------------------------------------------------------------------
 # Display detection
@@ -1384,12 +1045,12 @@ def choose_resolution(detected):
 
 
 def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, restore=False, engine_ini=None):
+                do_sharpen, restore=False, engine_ini=None, explicit=True):
     if restore:
         print("\nRestoring everything to stock...")
         ok = True
         if do_exe:
-            patch_exe(exe_path, 16, 9, "stock")
+            remove_camera(exe_path, engine_ini)
         if do_files:
             ok = apply_game_files(exe_path, width, height, restore=True) and ok
         if do_chromatic or do_sharpen:
@@ -1403,9 +1064,9 @@ def run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
     print("\nInstalling for {}x{} ({:.4f}:1)".format(
         width, height, width / float(height)))
 
-    print("\n[1/3] Ultrawide camera (executable)")
+    print("\n[1/3] Ultrawide camera (loader library)")
     if do_exe:
-        patch_exe(exe_path, width, height, "cine")
+        install_camera(exe_path, width, height, explicit, engine_ini)
     else:
         print("  skipped")
 
@@ -1439,8 +1100,8 @@ def run():
     parser.add_argument("--find-exe", action="store_true",
                         help="only report where the game was found, then exit")
     parser.add_argument("--check-exe", action="store_true",
-                        help="only report whether the executable is stock, "
-                             "already patched or unrecognised, then exit")
+                        help="only report whether the ultrawide camera loader "
+                             "is installed next to the executable, then exit")
     parser.add_argument("--width", type=int, help="display width, e.g. 5120")
     parser.add_argument("--height", type=int, help="display height, e.g. 2160")
     parser.add_argument("--restore", action="store_true",
@@ -1448,7 +1109,8 @@ def run():
     parser.add_argument("--yes", "-y", action="store_true",
                         help="accept all defaults, no prompts")
     parser.add_argument("--no-exe", action="store_true",
-                        help="skip the ultrawide camera patch (the executable)")
+                        help="skip the ultrawide camera (the loader library "
+                             "next to the executable)")
     parser.add_argument("--no-game-files", action="store_true",
                         help="skip the full-width UI patch (the game data files)")
     parser.add_argument("--no-chromatic-fix", action="store_true",
@@ -1460,11 +1122,6 @@ def run():
                         help="write the display tweaks to this Engine.ini instead "
                              "of the one found automatically - for a copy of the "
                              "game that runs in a prefix Steam does not manage")
-    parser.add_argument("--mode", choices=["cine", "horplus", "hybrid", "clean",
-                                           "full", "stock"],
-                        help="advanced: patch only the executable, in a given mode")
-    parser.add_argument("--gate-upper", type=float, metavar="ASPECT",
-                        help="advanced: explicit cave A upper bound")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -1486,7 +1143,7 @@ def run():
     if args.find_exe:
         return
 
-    status, detail = check_exe(exe_path)
+    status, detail = check_camera(exe_path)
     files_status, files_detail = check_game_files(exe_path)
     if args.check_exe:                       # machine-readable, for the GUI
         print("status: {}".format(status))
@@ -1494,20 +1151,11 @@ def run():
         print("files: {}".format(files_status))
         print("filesdetail: {}".format(files_detail))
         return
-    print("Executable: {}".format(detail))
+    print("Ultrawide camera: {}".format(detail))
     print("Full-width UI: {}".format(files_detail))
     if files_status == "stale":
         print("  !! the game has been updated since this was installed - "
               "install again before playing.")
-
-    # advanced escape hatch: executable only, explicit mode
-    if args.mode:
-        if args.mode != "stock" and not (args.width and args.height):
-            print("Error: --mode {} requires --width and --height".format(args.mode))
-            sys.exit(1)
-        patch_exe(exe_path, args.width or 16, args.height or 9, args.mode,
-                  gate_upper_aspect=args.gate_upper)
-        return
 
     detected = detect_resolution()
     if args.width and args.height:
@@ -1522,6 +1170,9 @@ def run():
         print("Display: {}x{} (detected)".format(width, height))
     else:
         width, height = choose_resolution(detected)
+    # chosen by hand, or not what this machine's display says: the loader
+    # then gets told, instead of reading the display itself at launch
+    explicit = detected is None or (width, height) != tuple(detected)
 
     if args.restore:
         run_install(exe_path, width, height,
@@ -1539,7 +1190,8 @@ def run():
         print("\nWhat to install:")
         do_exe = ask_yes(
             "\n  Ultrawide camera - Hor+ cutscenes, dialogue and exploration with no\n"
-            "  black bars and no zoom when a dialogue ends. Patches the executable.",
+            "  black bars and no zoom when a dialogue ends. Installs a small library\n"
+            "  the game loads at start; the executable itself is not changed.",
             do_exe)
         do_files = ask_yes(
             "\n  Full-width UI - loading screens cover the whole screen and the HUD\n"
@@ -1559,7 +1211,7 @@ def run():
         return
 
     run_install(exe_path, width, height, do_exe, do_files, do_chromatic,
-                do_sharpen, engine_ini=args.engine_ini)
+                do_sharpen, engine_ini=args.engine_ini, explicit=explicit)
 
 
 def survive_odd_characters():
