@@ -39,7 +39,7 @@ Click **Restore original** in the installer.
 
 ## Installation (Linux and Steam Deck)
 
-> **Tested on Windows only.** The installer supports SteamOS, the Steam Deck and Linux under Proton (native, Flatpak or Snap Steam), but has not been run on real hardware. If something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues).
+> **Verified on Bazzite** (Desktop Mode, Steam, Proton) as well as on Windows. The installer also supports SteamOS, the Steam Deck and Flatpak or Snap Steam, which have not been tried on real hardware yet. If something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues).
 
 Requirements: Python 3.6 or newer, nothing else.
 
@@ -65,7 +65,7 @@ Useful flags:
 | :--- | :--- |
 | `--exe <path>` | Point at a specific `Chronos-Win64-Shipping.exe` |
 | `--find-exe` | Print where the game was found and exit |
-| `--check-exe` | Report whether the executable is stock, patched or unrecognised |
+| `--check-exe` | Report whether the camera loader is installed and what it did at the last launch |
 | `--engine-ini <path>` | Path to `Engine.ini` inside a prefix Steam does not manage (Heroic, Lutris, plain Wine) |
 | `--no-exe`, `--no-game-files`, `--no-chromatic-fix` | Skip individual parts of the fix |
 | `--sharpen` | Also apply the anti-blur settings |
@@ -73,6 +73,19 @@ Useful flags:
 With Steam, `Engine.ini` lives at `steamapps/compatdata/1874000/pfx/drive_c/users/steamuser/AppData/Local/Chronos/Saved/Config/Windows/Engine.ini` and is found automatically.
 
 Wine loads its own `winhttp.dll` unless told otherwise, so the installer registers the fix's library in the prefix's `user.reg`, for the game's executable only; **Restore** removes the entry again. For a prefix Steam does not manage, `--engine-ini` tells the installer which prefix that is. If the library still does not run (no `LiSUltrawideCamera.log` appears next to the game executable after a launch), add `WINEDLLOVERRIDES="winhttp=n,b" %command%` to the game's launch options.
+
+### Gaming Mode (gamescope)
+
+In Gaming Mode the game only sees the screen gamescope gives it, and Steam's per-game resolution list stops at that size. If gamescope runs at 16:9 (3840x2160, say), the game renders 16:9, gamescope adds the side bars, and the camera fix stays inactive; the log will show that 16:9 size. Nothing needs reinstalling: the loader reads the screen at every launch, so the fix switches on as soon as gamescope's screen has the panel's aspect.
+
+To set that screen, put the panel size in `~/.config/environment.d/gamescope-session-plus.conf` and log out of Gaming Mode and back in (Bazzite, SteamOS and ChimeraOS sessions all read this file):
+
+```
+SCREEN_WIDTH=5120
+SCREEN_HEIGHT=2160
+```
+
+Then pick **Native** in the game's Steam properties; 5120x2160 is not in Steam's preset list. The fix only needs the aspect, not the pixel count: a lighter 21:9 screen such as `3440` x `1440` works just as well and is the setting to use if the full size is too heavy for the GPU. On NVIDIA, keep HDR off in Gaming Mode at sizes above 2560x1440, which still corrupts the picture with current drivers.
 
 ---
 

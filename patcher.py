@@ -306,14 +306,14 @@ def _generic_candidates():
 # The camera fix is applied to the game's code in memory, at every launch, by
 # a small library the game loads by itself. It is installed as winhttp.dll
 # next to the game executable: the game imports a DLL of that name, and
-# Windows looks for it in the game's own folder first. (Not winhttp.dll, the
+# Windows looks for it in the game's own folder first. (Not version.dll, the
 # usual choice for this: Windows' compatibility shim engine, active as soon
 # as a player sets any compatibility option on the executable, loads the
-# System32 winhttp.dll before the game's imports are resolved, and the game
+# System32 version.dll before the game's imports are resolved, and the game
 # then reuses that copy.) The library forwards the real winhttp.dll's
-# functions to the system copy and, before the game's
-# own code runs, finds the three patch sites by signature and writes the bytes
-# RESEARCH.md describes. The executable on disk is never modified, so Steam's
+# functions to the system copy and, before the game's own code runs, finds
+# the three patch sites by signature and writes the bytes RESEARCH.md
+# describes. The executable on disk is never modified, so Steam's
 # Verify Integrity, game updates and reinstalls leave the fix in place, and
 # there is nothing to back up or restore.
 #
@@ -323,13 +323,18 @@ def _generic_candidates():
 # here.
 
 DLL_SHIPPED = "LiSUltrawideCamera.dll"      # in the fix's own folder
+# The name the loader is installed under. One, on purpose: a second name for
+# when another mod holds this one would have to pass the load-order check
+# that ruled version.dll out first. The loader is ready for it (one forward!
+# block per name in crates/camera/src/forward.rs), and the refusal below
+# names the other mod, so a report says what collided.
 DLL_INSTALLED = "winhttp.dll"               # next to the game executable
 DLL_MARKER = "LiSUltrawideCamera".encode("utf-16-le")  # in its version resource
 CAMERA_INI = "LiSUltrawideCamera.ini"
 CAMERA_LOG = "LiSUltrawideCamera.log"
 # The per-application override winecfg would write, as it appears in user.reg.
 WINE_OVERRIDE_KEY = "Software\\\\Wine\\\\AppDefaults\\\\" + EXE_NAME + "\\\\DllOverrides"
-WINE_OVERRIDE_VALUE = '"winhttp"="native,builtin"'
+WINE_OVERRIDE_VALUE = '"{}"="native,builtin"'.format(DLL_INSTALLED[:-4])
 
 VERIFY_HINT = ("Use Steam's 'Verify Integrity of Game Files' (right-click the "
                "game, Properties, Installed Files) to put a stock executable "
@@ -353,6 +358,39 @@ def is_our_dll(path):
             return DLL_MARKER in f.read()
     except (IOError, OSError):
         return False
+
+
+def describe_dll(path):
+    """What a DLL's version resource says it is - "Ultimate ASI Loader
+    (ThirteenAG)" - or None when it says nothing. Each string in the resource
+    is UTF-16 and sits right after its key, padded to four bytes, so this needs
+    no walk of the resource tree."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except (IOError, OSError):
+        return None
+
+    def string(key):
+        needle = key.encode("utf-16-le") + b"\0\0"
+        at = data.find(needle)
+        if at < 0:
+            return None
+        at += len(needle)
+        while data[at:at + 2] == b"\0\0":          # alignment padding
+            at += 2
+        chars = []
+        while len(chars) < 100 and data[at:at + 2] not in (b"", b"\0\0"):
+            chars.append(data[at:at + 2])
+            at += 2
+        text = b"".join(chars).decode("utf-16-le", "replace").strip()
+        return text if text and text.isprintable() else None
+
+    what = string("FileDescription") or string("ProductName")
+    company = string("CompanyName")
+    if what and company and company not in what:
+        return "{} ({})".format(what, company)
+    return what or company
 
 
 def same_bytes(a, b):
@@ -408,8 +446,10 @@ def check_camera(exe_path):
     if not os.path.isfile(dll):
         return "none", "not installed"
     if not is_our_dll(dll):
-        return "foreign", ("another program's winhttp.dll is next to the game, "
-                           "and the fix will not replace it")
+        what = describe_dll(dll)
+        return "foreign", ("another program's {}{} is next to the game, and the "
+                           "fix will not replace it".format(
+                               DLL_INSTALLED, " ({})".format(what) if what else ""))
     launch = last_launch(log)
     tail = (" - last launch: " + launch) if launch \
         else " - the game has not been started since"
@@ -595,14 +635,17 @@ def game_is_running():
     """Linux: is the game's process alive? Wine writes its registry back when
     it shuts down, over anything changed in the file while it ran."""
     try:
-        for pid in os.listdir("/proc"):
-            if not pid.isdigit():
-                continue
-            with open("/proc/{}/cmdline".format(pid), "rb") as f:
-                if EXE_NAME.lower().encode() in f.read().lower():
-                    return True
+        pids = [pid for pid in os.listdir("/proc") if pid.isdigit()]
     except (IOError, OSError):
-        pass
+        return False
+    needle = EXE_NAME.lower().encode()
+    for pid in pids:
+        try:
+            with open("/proc/{}/cmdline".format(pid), "rb") as f:
+                if needle in f.read().lower():
+                    return True
+        except (IOError, OSError):
+            continue                # gone since the listing, or not ours to read
     return False
 
 
@@ -615,7 +658,7 @@ def wine_dll_override(exe_path, engine_ini=None, remove=False):
         print("  !! no Proton prefix found for the game, so Wine does not know to")
         print("     load the fix yet. Start the game once through Steam, quit, and")
         print("     run Install again - or add this to the game's launch options:")
-        print('       WINEDLLOVERRIDES="version=n,b" %command%')
+        print('       WINEDLLOVERRIDES="{}=n,b" %command%'.format(DLL_INSTALLED[:-4]))
         return
     reg = os.path.join(pfx, "user.reg")
     if game_is_running():
@@ -650,10 +693,13 @@ def install_camera(exe_path, width, height, explicit, engine_ini=None):
     retire_exe_patch(exe_path)
     dll, ini, log = camera_paths(exe_path)
     if os.path.isfile(dll) and not is_our_dll(dll):
+        what = describe_dll(dll)
         raise InstallError(
-            "there is already a winhttp.dll next to the game that is not this "
-            "fix's - another mod's loader, probably. The fix needs that name; "
-            "move the other file away and run this again.")
+            "there is already a {} next to the game that is not this fix's{}. "
+            "The fix needs that name: move the other file away and run this "
+            "again, and please report which mod it belongs to.".format(
+                DLL_INSTALLED,
+                " - it says it is " + what if what else " - another mod's loader, probably"))
     if os.path.isfile(dll) and same_bytes(dll, shipped):
         print("  loader already in place: {}".format(dll))
     else:

@@ -147,7 +147,7 @@ caveB: 48 83 EC 28          sub  rsp, 0x28        ; shadow space for Super
 Every other invocation of the base `GetCameraView` is a virtual call (non-cine cameras), so this affects exactly the cine class. `rdi` survives the call (callee-saved); stack alignment and Win64 shadow-space rules are respected.
 
 ### 2e. Cave Placement
-Both caves are written into `int3` inter-function padding runs in `.text` (first run large enough, found at launch; rel32 displacements computed then too). The loader writes them from the proxy DLL's `DllMain`, after Windows has mapped the image and before the game's entry point runs, making each page writable for the write and restoring its protection afterwards. The caves execute but never store data - `.text` is mapped R-X; a future patch needing writable storage now has the loader's own memory for it (see 5).
+Both caves are written into `int3` inter-function padding runs in the code sections (`.text` here; the loader walks every section flagged executable, which Reunion's renamed sections will need) - the first run large enough, found at launch; rel32 displacements computed then too). The loader writes them from the proxy DLL's `DllMain`, after Windows has mapped the image and before the game's entry point runs, making each page writable for the write and restoring its protection afterwards. The caves execute but never store data - `.text` is mapped R-X; a future patch needing writable storage now has the loader's own memory for it (see 5).
 
 ---
 

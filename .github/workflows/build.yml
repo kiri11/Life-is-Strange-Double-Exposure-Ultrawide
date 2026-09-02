@@ -43,9 +43,11 @@ jobs:
       - run: python tests/test_kraken.py -v
       - run: python tests/test_paths.py
       - run: python tests/test_camera.py
-      # The camera loader's planner against a made-up image. Its test
-      # against the real executable skips itself where there is no game.
-      - run: cargo test --release --workspace
+      # The camera loader's planner against a made-up image, once per OS
+      # since it does not depend on Python. Its test against the real
+      # executable skips itself where there is no game.
+      - if: matrix.python == '3.x'
+        run: cargo test --release --workspace
 
   build:
     needs: test

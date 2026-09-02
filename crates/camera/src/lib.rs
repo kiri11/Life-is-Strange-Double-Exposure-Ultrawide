@@ -38,6 +38,11 @@ pub const VERSION: &str = match option_env!("LIS_FIX_VERSION") {
     None => "dev",
 };
 
+/// The names this library can be installed as, in the installer's order of
+/// preference: one today. A second needs a `forward!` block of its exports
+/// in `forward.rs`, and the load-order check that ruled version.dll out.
+pub const PROXY_NAMES: &[&str] = &["winhttp.dll"];
+
 /// `"0FB6 83"`-style hex, spaces optional, into bytes.
 pub fn hex(text: &str) -> Vec<u8> {
     let digits: String = text.chars().filter(|c| !c.is_whitespace()).collect();

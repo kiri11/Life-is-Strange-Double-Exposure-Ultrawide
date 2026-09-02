@@ -29,6 +29,7 @@ pub unsafe fn attach(hinst: *mut c_void) {
     let mut log = String::new();
     let _ = writeln!(log, "LiS Ultrawide Fix camera loader {VERSION} - {}", utc_now());
     let _ = writeln!(log, "process: {}", exe.display());
+    let _ = writeln!(log, "loaded as {}", me.display());
     let outcome = unsafe { run(game, &dir, &mut log) };
     match outcome {
         Ok(n) => {
@@ -105,6 +106,8 @@ unsafe fn run(game: &games::Game, dir: &Path, log: &mut String) -> Result<usize,
 
 /// Every write or none: the expected bytes are checked again right before
 /// writing, and every page is made writable before the first byte changes.
+/// Protections go back in reverse order: two writes on one page each saw a
+/// different "old" value, and only the first one's is the page's own.
 unsafe fn apply(base: *mut u8, plan: &Plan) -> Result<(), String> {
     for w in &plan.writes {
         let now = unsafe { slice(base.add(w.va as usize), w.expected.len()) };
@@ -118,7 +121,7 @@ unsafe fn apply(base: *mut u8, plan: &Plan) -> Result<(), String> {
         let mut old = 0u32;
         if unsafe { win::VirtualProtect(addr, w.bytes.len(), win::PAGE_EXECUTE_READWRITE, &mut old) } == 0 {
             let err = unsafe { win::GetLastError() };
-            for (done, old) in plan.writes.iter().zip(&previous) {
+            for (done, old) in plan.writes.iter().zip(&previous).rev() {
                 let addr = unsafe { base.add(done.va as usize) } as *const c_void;
                 let mut ignore = 0;
                 unsafe { win::VirtualProtect(addr, done.bytes.len(), *old, &mut ignore) };
@@ -130,7 +133,7 @@ unsafe fn apply(base: *mut u8, plan: &Plan) -> Result<(), String> {
     for w in &plan.writes {
         unsafe { core::ptr::copy_nonoverlapping(w.bytes.as_ptr(), base.add(w.va as usize), w.bytes.len()) };
     }
-    for (w, old) in plan.writes.iter().zip(previous) {
+    for (w, old) in plan.writes.iter().zip(previous).rev() {
         let addr = unsafe { base.add(w.va as usize) } as *const c_void;
         let mut ignore = 0;
         unsafe {

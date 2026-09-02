@@ -46,7 +46,7 @@ def wine_override():
     # a stale value of ours is replaced, not duplicated
     stale = REG + '\n' + KEY + ' 1700000000\n"winhttp"="builtin"\n'
     check(patcher.set_wine_dll_override(stale) == REG + '\n' + KEY + ' 1700000000\n'
-          + patcher.WINE_OVERRIDE_VALUE + '\n', 'a different value for version is replaced')
+          + patcher.WINE_OVERRIDE_VALUE + '\n', 'a different value for winhttp is replaced')
     # a key that is not the last block in the file
     middle = REG.replace('[Software\\\\Wine\\\\DllOverrides]',
                          KEY + ' 1700000000\n"winhttp"="native,builtin"\n\n[Software\\\\Wine\\\\DllOverrides]')
@@ -75,6 +75,14 @@ def loader_status():
         f.write(b'MZ some other mod')
     check(not patcher.is_our_dll(dll), 'a foreign winhttp.dll is not ours')
     check(patcher.check_camera(exe)[0] == 'foreign', 'a foreign winhttp.dll: foreign')
+    check(patcher.describe_dll(dll) is None, 'no version resource: nothing to describe')
+    # the strings of a version resource: key, terminator, padding to 4, value
+    with open(dll, 'wb') as f:
+        f.write(b'MZ' + 'FileDescription'.encode('utf-16-le') + b'\0\0\0\0'
+                + 'Some Loader'.encode('utf-16-le') + b'\0\0'
+                + 'CompanyName'.encode('utf-16-le') + b'\0\0' + 'Someone'.encode('utf-16-le') + b'\0\0')
+    check(patcher.describe_dll(dll) == 'Some Loader (Someone)', 'a foreign loader is described from its version resource')
+    check('Some Loader' in patcher.check_camera(exe)[1], 'the status names the other program')
     with open(dll, 'wb') as f:
         f.write(b'MZ' + patcher.DLL_MARKER + b'!')
     check(patcher.is_our_dll(dll), 'the marker identifies our loader')
