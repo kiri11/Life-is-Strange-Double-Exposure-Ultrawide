@@ -1,16 +1,15 @@
-# Builds LiSUltrawidePatcher.exe from LiSUltrawidePatcher.cs and, for pushes to
-# main, publishes it as a release. The exe is deliberately NOT in the repository:
-# a committed binary drifts from the source next to it, and nobody can tell by
-# looking. Here the only exe that exists is the one this file just compiled.
+# Builds the fix and, for pushes to main, publishes it as a release. No binary
+# is in the repository: a committed binary drifts from the source next to it,
+# and nobody can tell by looking. Here the only binaries that exist are the
+# ones this file just compiled.
 #
-# Every push to main cuts its own release and no release is ever overwritten, so
-# a build that turns out bad can always be compared against the one before it.
-# Put [skip ci] in the commit subject to push without releasing.
+# Every push to main cuts its own release and no release is ever overwritten,
+# so a build that turns out bad can always be compared against the one before
+# it. Put [skip ci] in the commit subject to push without releasing.
 #
-# Each release carries two archives with the same contents, except that the
-# second also holds python.org's embeddable Python, so the GUI never has to
-# download one. That is the archive for mod sites, whose rules frown on files
-# that fetch things from the internet; the small one is for everyone else.
+# One archive per platform. Windows: the front-end, the installer with the
+# loader embedded, and the source. Linux: a static installer and the source.
+# Nothing in either downloads anything.
 name: Build and release
 
 on:
@@ -23,33 +22,22 @@ permissions:
   contents: write
 
 jobs:
-  # The Kraken decoder is plain Python and has to give the same bytes on every
-  # platform the fix claims - so the same vectors are decoded on Linux and on
-  # Windows, with the oldest Python the runners offer and the newest. The
-  # path test builds a fake Steam layout in a temporary home; the Linux run is
-  # the only Linux this project is ever tried on.
+  # The Kraken decoder, the container writer and the path search have to
+  # behave the same on every platform the fix claims, so the whole workspace
+  # is tested on Linux and on Windows. The tests against the game's own
+  # files skip themselves where there is no game. The installer built here
+  # carries no loader, which is fine for tests and refused at run time.
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.8', '3.x']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python }}
-      - run: python tests/test_kraken.py -v
-      - run: python tests/test_paths.py
-      - run: python tests/test_camera.py
-      # The camera loader's planner against a made-up image, once per OS
-      # since it does not depend on Python. Its test against the real
-      # executable skips itself where there is no game.
-      - if: matrix.python == '3.x'
-        run: cargo test --release --workspace
+      - run: cargo test --release --workspace
 
-  build:
+  build-windows:
     needs: test
     runs-on: windows-latest
     # Two builds at once would read the same tag list below and pick the same
@@ -58,6 +46,8 @@ jobs:
     concurrency:
       group: release
       cancel-in-progress: false
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       # The full history, because the version below counts today's tags.
@@ -67,9 +57,10 @@ jobs:
 
       # One version number for the whole fix, written here rather than kept in
       # step by hand: today's date and how many builds today has already had,
-      # which is also the release tag. Stamping it into both files before the
-      # compile means the exe, the installer and the tag can never disagree
-      # about which build they are.
+      # which is also the release tag. Every binary is stamped with it before
+      # it is compiled (LIS_FIX_VERSION for the Rust ones, the assembly
+      # attributes for the C#), so the front-end, the installer, the loader
+      # and the tag can never disagree about which build they are.
       #
       # The count comes from the tags rather than from GITHUB_RUN_NUMBER, which
       # never resets, so the number stays small and starts each day at 01. It
@@ -77,6 +68,7 @@ jobs:
       # where an unpadded .10 falls under .4 and the newest build stops showing
       # up on top; two digits is more builds in one day than this will ever see.
       - name: Stamp the version
+        id: version
         shell: pwsh
         run: |
           $today = Get-Date -Format 'yyyy.MM.dd'
@@ -86,30 +78,30 @@ jobs:
           $numeric = ($version -split '\.' | ForEach-Object { [int]$_ }) -join '.'
           Write-Host "version $version (assembly $numeric)"
           "VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8NoBOM
-
-          $py = Get-Content patcher.py -Raw
-          $py = $py -replace '(?m)^VERSION = ".+"$', "VERSION = `"$version`""
-          Set-Content patcher.py $py -NoNewline -Encoding utf8NoBOM
+          "version=$version" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
 
           $cs = Get-Content LiSUltrawidePatcher.cs -Raw
           $cs = $cs -replace 'AssemblyVersion\(".+?"\)', "AssemblyVersion(`"$numeric`")"
           $cs = $cs -replace 'AssemblyFileVersion\(".+?"\)', "AssemblyFileVersion(`"$numeric`")"
           $cs = $cs -replace 'AssemblyInformationalVersion\(".+?"\)', "AssemblyInformationalVersion(`"$version`")"
           Set-Content LiSUltrawidePatcher.cs $cs -NoNewline -Encoding utf8NoBOM
-
-          Select-String -Path patcher.py -Pattern '^VERSION'
           Select-String -Path LiSUltrawidePatcher.cs -Pattern 'Assembly.*Version\('
 
-      # The camera loader, stamped with the same version. Rust is on the runner
-      # already; the crate's build script wants the Windows SDK's resource
-      # compiler for the version resource, which the runner has too.
-      - name: Build the camera loader
+      # The loader first, then the installer that embeds it. Rust is on the
+      # runner already; the build scripts want the Windows SDK's resource
+      # compiler for the version resources, which the runner has too.
+      - name: Build the loader and the installer
         shell: pwsh
         env:
           LIS_FIX_VERSION: ${{ env.VERSION }}
         run: |
-          cargo build --release --workspace
-          if (-not (Test-Path target/release/lis_ultrawide_camera.dll)) { throw 'no loader DLL was built' }
+          cargo build --release -p lis-ultrawide-loader
+          if (-not (Test-Path target/release/lis_ultrawide_loader.dll)) { throw 'no loader DLL was built' }
+          cargo build --release -p lis-ultrawide-fix
+          $banner = & target/release/lis-ultrawide-fix.exe --version
+          Write-Host $banner
+          if ($banner -notmatch 'embedded') { throw 'the installer was built without the loader' }
+          if ($banner -notmatch [regex]::Escape($env:VERSION)) { throw 'the installer does not carry the release version' }
 
       # The stock .NET Framework compiler, present on every Windows image and on
       # every Windows the fix targets. No SDK, no csproj, no restore step. Keep
@@ -121,115 +113,122 @@ jobs:
           /win32icon:LiSUltrawidePatcher.ico
           /out:LiSUltrawidePatcher.exe LiSUltrawidePatcher.cs
           /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll
-          /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
 
-      # What a user needs to run the fix, plus the one file the license needs.
-      # tools/assetdump is not optional: patcher.py shells out to
-      # patch_ui_layout.py for the full-width UI step, so a zip without it
-      # silently installs three of the four parts. The loader DLL ships under
-      # its own name; the installer copies it next to the game as winhttp.dll.
-      # LiSUltrawidePatcher.cs and the loader's crate are not on the runtime
-      # path, but they are the two binaries' source, and shipping them makes
-      # the archive its own corresponding source under GPL-3 section 6 - so a
-      # download from a mod site carries everything the license promises,
-      # with no link to follow.
-      # The research scripts (audit_offsets, pak, usmap, verify_kraken,
-      # make_kraken_vectors), the tests, RESEARCH.md and make_icon.py are not
-      # on the runtime path and stay in the repository only.
-      - name: Stage the release files
+      # What a user needs to run the fix, the file the license needs, and the
+      # source of everything in it: the archive is its own corresponding
+      # source under GPL-3 section 6, so a download from a mod site carries
+      # everything the license promises, with no link to follow. The loader
+      # is inside the installer, so no loose DLL ships. RESEARCH.md and the
+      # icon generator stay in the repository only.
+      - name: Stage the Windows archive
         shell: pwsh
         run: |
-          $root = 'staging/LiS-DE-Ultrawide-Fix'
-          New-Item -ItemType Directory -Path "$root/tools/assetdump" -Force | Out-Null
-          $top = @(
-            'LiSUltrawidePatcher.exe',   # the GUI front-end, built above
-            'LiSUltrawidePatcher.cs',    # its source - the zip is GPL-complete
-            'patcher.py',                # the installer
-            'README.md',                 # install and troubleshooting instructions
-            'LICENSE'                    # GPL-3.0: the binary must carry its terms
-          )
-          $assetdump = @(
-            'patch_ui_layout.py',        # entry point patcher.py invokes
-            'container.py',              # writes the mod container it installs
-            'iostore.py', 'zen.py', 'slots.py', 'unver.py',  # container readers
-            'kraken.py',                 # pure-Python Oodle Kraken decoder
-            'oodle.py',                  # the readers' decompress() entry point
-            'blake3_pure.py',            # stdlib BLAKE3, so no wheel is required
-            'README.md'                  # what each of these files is
-          )
-          foreach ($f in $top) { Copy-Item $f "$root/$f" }
-          Copy-Item target/release/lis_ultrawide_camera.dll "$root/LiSUltrawideCamera.dll"
-          $crate = @('Cargo.toml', 'Cargo.lock', '.cargo/config.toml',
-                     'crates/camera/Cargo.toml', 'crates/camera/build.rs')
-          foreach ($f in $crate) {
-            New-Item -ItemType Directory -Path (Split-Path "$root/$f") -Force | Out-Null
-            Copy-Item $f "$root/$f"
-          }
-          Copy-Item -Recurse crates/camera/src "$root/crates/camera/src"
-          Copy-Item -Recurse crates/camera/tests "$root/crates/camera/tests"
-          foreach ($f in $assetdump) { Copy-Item "tools/assetdump/$f" "$root/tools/assetdump/$f" }
-          Compress-Archive -Path $root -DestinationPath 'LiS-DE-Ultrawide-Fix.zip'
+          $root = 'staging/LiS-Ultrawide-Fix-Windows'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          foreach ($f in 'LiSUltrawidePatcher.exe', 'LiSUltrawidePatcher.cs', 'README.md', 'LICENSE') { Copy-Item $f "$root/$f" }
+          Copy-Item target/release/lis-ultrawide-fix.exe "$root/lis-ultrawide-fix.exe"
+          ./scripts/stage-source.ps1 $root
+          Compress-Archive -Path $root -DestinationPath 'LiS-Ultrawide-Fix-Windows.zip'
           Get-ChildItem -Recurse $root | Select-Object FullName, Length
 
-      # The same files plus python.org's embeddable build, unpacked into
-      # tools/python - the place LiSUltrawidePatcher.cs looks before it would
-      # download one. The URL is read from the .cs so the two cannot disagree;
-      # the digest is pinned here and has to be updated with it, so a swapped
-      # download fails the build rather than shipping.
-      - name: Stage the archive with Python bundled
-        shell: pwsh
+      # The loader travels to the Linux job, whose installer embeds the same
+      # bytes; the staged folder is available on pull requests too, so a build
+      # can be tested before it ships.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: loader-dll
+          path: target/release/lis_ultrawide_loader.dll
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LiS-Ultrawide-Fix-Windows
+          path: staging/LiS-Ultrawide-Fix-Windows
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-zip
+          path: LiS-Ultrawide-Fix-Windows.zip
+
+  # A static musl binary, so one file runs on SteamOS, Bazzite, Ubuntu and
+  # inside or outside Flatpak Steam. It embeds the loader the Windows job
+  # built: the loader is a Windows DLL whatever the installer runs on.
+  build-linux:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build-windows.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: loader-dll
+          path: loader
+      - name: Build the static installer
+        env:
+          LIS_FIX_VERSION: ${{ env.VERSION }}
+          LIS_LOADER_DLL: ${{ github.workspace }}/loader/lis_ultrawide_loader.dll
         run: |
-          $url = (Select-String -Path LiSUltrawidePatcher.cs -Pattern 'https://www\.python\.org/ftp/python/[^"]+-embed-amd64\.zip').Matches[0].Value
-          $sha256 = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'   # python-3.12.10-embed-amd64.zip
-          Write-Host "fetching $url"
-          Invoke-WebRequest -Uri $url -OutFile python-embed.zip
-          $got = (Get-FileHash python-embed.zip -Algorithm SHA256).Hash.ToLower()
-          if ($got -ne $sha256) { throw "python-embed.zip: SHA-256 $got, expected $sha256" }
-
-          $root = 'staging-python/LiS-DE-Ultrawide-Fix'
-          New-Item -ItemType Directory -Path 'staging-python' -Force | Out-Null
-          Copy-Item -Recurse 'staging/LiS-DE-Ultrawide-Fix' $root
-          Expand-Archive -Path python-embed.zip -DestinationPath "$root/tools/python"
-          if (-not (Test-Path "$root/tools/python/python.exe")) { throw 'no python.exe in the embeddable archive' }
-          # the bundled interpreter has to run the installer, not only exist
-          & "$root/tools/python/python.exe" "$root/patcher.py" --version
-          if ($LASTEXITCODE -ne 0) { throw 'the bundled Python cannot run patcher.py' }
-          Compress-Archive -Path $root -DestinationPath 'LiS-DE-Ultrawide-Fix-bundled-with-Python.zip'
-          Get-ChildItem 'LiS-DE-Ultrawide-Fix.zip', 'LiS-DE-Ultrawide-Fix-bundled-with-Python.zip' | Select-Object Name, Length
-
-      # Available on pull requests too, so a build can be tested before it ships.
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release -p lis-ultrawide-fix --target x86_64-unknown-linux-musl
+          bin=target/x86_64-unknown-linux-musl/release/lis-ultrawide-fix
+          file "$bin"
+          file "$bin" | grep -q 'statically linked' || { echo 'the installer is not static'; exit 1; }
+          if ldd "$bin" 2>/dev/null | grep -q '=>'; then echo 'the installer links shared libraries'; exit 1; fi
+          banner=$("$bin" --version)
+          echo "$banner"
+          echo "$banner" | grep -q embedded || { echo 'the installer was built without the loader'; exit 1; }
+          echo "$banner" | grep -qF "$VERSION" || { echo 'the installer does not carry the release version'; exit 1; }
+      # A tarball, so the execute bit survives the trip.
+      - name: Stage the Linux archive
+        run: |
+          root=staging/LiS-Ultrawide-Fix-Linux
+          mkdir -p "$root"
+          cp target/x86_64-unknown-linux-musl/release/lis-ultrawide-fix "$root/"
+          chmod +x "$root/lis-ultrawide-fix"
+          cp README.md LICENSE "$root/"
+          pwsh ./scripts/stage-source.ps1 "$root"
+          tar -C staging -czf LiS-Ultrawide-Fix-Linux.tar.gz LiS-Ultrawide-Fix-Linux
+          find "$root" -type f | sort | xargs ls -l
       - uses: actions/upload-artifact@v7
         with:
-          name: LiS-DE-Ultrawide-Fix
-          path: staging/LiS-DE-Ultrawide-Fix
+          name: LiS-Ultrawide-Fix-Linux
+          path: staging/LiS-Ultrawide-Fix-Linux
       - uses: actions/upload-artifact@v7
         with:
-          name: LiS-DE-Ultrawide-Fix-bundled-with-Python
-          path: staging-python/LiS-DE-Ultrawide-Fix
+          name: linux-tar
+          path: LiS-Ultrawide-Fix-Linux.tar.gz
 
-      # The tag is the version stamped above - date plus today's build number:
-      # readable, sorted by GitHub the way it was built, and unique even for
-      # two pushes on the same day, so no release
-      # ever replaces another, and the build reports the tag it ships under. The
-      # zips keep fixed names, which is what makes the README's
-      # /releases/latest/ download links work for every future release.
+  # The tag is the version stamped above - date plus today's build number:
+  # readable, sorted by GitHub the way it was built, and unique even for two
+  # pushes on the same day, so no release ever replaces another, and every
+  # binary reports the tag it ships under. The archives keep fixed names,
+  # which is what makes the README's /releases/latest/ download links work
+  # for every future release.
+  release:
+    needs: [build-windows, build-linux]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build-windows.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-zip
+      - uses: actions/download-artifact@v7
+        with:
+          name: linux-tar
       - name: Publish the release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v$env:VERSION"
-          $run = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-          $notes = @(
-            (git log -1 --pretty=%s),
-            '',
-            'Download **LiS-DE-Ultrawide-Fix.zip** (recommended), unpack it anywhere and run `LiSUltrawidePatcher.exe` on Windows or `python3 patcher.py` on Linux and the Steam Deck.',
-            '',
-            'It runs with the Python already on the machine. On a Windows PC without one, `LiSUltrawidePatcher.exe` downloads a private copy (~11 MB) into its own folder.',
-            '',
-            '**LiS-DE-Ultrawide-Fix-bundled-with-Python.zip** is the same fix with that copy of Python already inside, so nothing is downloaded. The bundled Python is only used on Windows.',
-            '',
-            ('Built from `${{ github.sha }}` by [this run](' + $run + ').')
-          ) -join "`n"
-          gh release create $tag 'LiS-DE-Ultrawide-Fix.zip' 'LiS-DE-Ultrawide-Fix-bundled-with-Python.zip' --title $tag --notes $notes
+          tag="v$VERSION"
+          run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          notes="$(git log -1 --pretty=%s)
+
+          **Windows:** download LiS-Ultrawide-Fix-Windows.zip, unpack it anywhere and run \`LiSUltrawidePatcher.exe\`.
+
+          **Linux and Steam Deck:** download LiS-Ultrawide-Fix-Linux.tar.gz, unpack it and run \`./lis-ultrawide-fix\` from a terminal (or double-click it in Desktop mode).
+
+          Nothing is downloaded and nothing is installed system-wide; each archive holds the whole fix and its source.
+
+          Built from \`${{ github.sha }}\` by [this run]($run)."
+          gh release create "$tag" LiS-Ultrawide-Fix-Windows.zip LiS-Ultrawide-Fix-Linux.tar.gz --title "$tag" --notes "$notes"

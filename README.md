@@ -8,13 +8,13 @@ A native ultrawide fix for **Life is Strange: Double Exposure**. Works with 21:9
 - Loading screens and HUD elements use the full width of the screen.
 - Optional: disable chromatic aberration and reduce blurriness.
 
-The game's own files are never modified: the camera fix is a small library the game loads at start, and the UI fix is a mod container next to the game data. Nothing runs in the background and there is no performance impact. Everything can be undone with a single **Restore** button.
+The game's own files are never modified: the camera fix is a small library the game loads at start, and the UI fix is a mod container next to the game data. Nothing runs in the background, nothing is downloaded, nothing is installed system-wide, and there is no performance impact. Everything can be undone with a single **Restore** button.
 
 ---
 
 ## Installation (Windows)
 
-1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-DE-Ultrawide-Fix.zip)** and unpack the zip anywhere.
+1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix-Windows.zip)** and unpack the zip anywhere.
 2. Run **`LiSUltrawidePatcher.exe`**.
 3. It finds your game and your display automatically. If it does not find the game, click **Browse...** and select the game executable.
 4. Leave the options ticked and click **Install**.
@@ -23,7 +23,7 @@ That is it. Start the game and play.
 
 **Windows will warn you the first time.** The program is not code-signed, so SmartScreen shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**. Some antivirus tools also flag it, as they do most unsigned game mods. The program is built by GitHub Actions from the source in this repository, so you can check exactly what it does.
 
-**No internet on the gaming PC?** The installer needs Python and downloads a small private copy if your PC has none. To skip that download, use **[LiS-DE-Ultrawide-Fix-bundled-with-Python.zip](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-DE-Ultrawide-Fix-bundled-with-Python.zip)** instead. Nothing is installed system-wide either way.
+The window is a front-end for `lis-ultrawide-fix.exe`, the installer in the same folder, which also works on its own from a command prompt (see the Linux section for its commands).
 
 ### After a game update
 
@@ -41,33 +41,34 @@ Click **Restore original** in the installer.
 
 > **Verified on Bazzite** (Desktop Mode, Steam, Proton) as well as on Windows. The installer also supports SteamOS, the Steam Deck and Flatpak or Snap Steam, which have not been tried on real hardware yet. If something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues).
 
-Requirements: Python 3.6 or newer, nothing else.
+The installer is a single static binary; it needs nothing installed.
 
 1. Start the game once and quit, so that Steam creates the Proton prefix that holds `Engine.ini` and Wine's registry.
-2. Download and unpack the fix. On the Steam Deck, switch to **Desktop Mode** and open **Konsole**.
-3. `cd` into the unpacked folder and run:
+2. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix-Linux.tar.gz)** and unpack it. On the Steam Deck, switch to **Desktop Mode** first.
+3. Open a terminal (**Konsole** on the Deck), `cd` into the unpacked folder and run:
 
 ```bash
-python3 patcher.py
+./lis-ultrawide-fix
 ```
 
-Run with no arguments for an interactive install, or use flags:
+It asks what to install. Double-clicking `lis-ultrawide-fix` in the file manager works too: it then asks through the desktop's own dialogs (zenity, kdialog or yad, whichever is there) and never installs anything without asking. Or use the commands and flags directly:
 
 ```bash
-python3 patcher.py --yes
-python3 patcher.py --width 5120 --height 2160 --yes
-python3 patcher.py --restore
+./lis-ultrawide-fix install --yes
+./lis-ultrawide-fix install --width 5120 --height 2160 --yes
+./lis-ultrawide-fix restore
 ```
 
-Useful flags:
-
-| Flag | Purpose |
+| Command or flag | Purpose |
 | :--- | :--- |
+| `install`, `restore` | Install the fix, or undo everything it installed |
+| `status` | Report whether the camera loader and the UI container are installed and current |
+| `find` | Print where the game was found and exit |
 | `--exe <path>` | Point at a specific `Chronos-Win64-Shipping.exe` |
-| `--find-exe` | Print where the game was found and exit |
-| `--check-exe` | Report whether the camera loader is installed and what it did at the last launch |
+| `--width`, `--height` | Install for this resolution instead of the detected one |
+| `--yes` | Take the defaults without asking |
 | `--engine-ini <path>` | Path to `Engine.ini` inside a prefix Steam does not manage (Heroic, Lutris, plain Wine) |
-| `--no-exe`, `--no-game-files`, `--no-chromatic-fix` | Skip individual parts of the fix |
+| `--no-camera`, `--no-ui`, `--no-chromatic-fix` | Skip individual parts of the fix |
 | `--sharpen` | Also apply the anti-blur settings |
 
 With Steam, `Engine.ini` lives at `steamapps/compatdata/1874000/pfx/drive_c/users/steamuser/AppData/Local/Chronos/Saved/Config/Windows/Engine.ini` and is found automatically.
@@ -126,18 +127,30 @@ The loader writes `LiSUltrawideCamera.log` next to itself at every launch, sayin
 
 ## Technical details
 
-The fix changes a handful of bytes in the game's code, in memory at every launch, to force Unreal Engine's built-in Hor+ projection for every camera, and adds a small mod container with full-width versions of the game's UI packages. The loader that applies the camera patch is a Rust library in [`crates/camera`](crates/camera): installed as `winhttp.dll`, it forwards that DLL's functions to the system copy and patches the game before its own code runs. The complete reverse-engineering breakdown is in **[RESEARCH.md](RESEARCH.md)**.
+The fix changes a handful of bytes in the game's code, in memory at every launch, to force Unreal Engine's built-in Hor+ projection for every camera, and adds a small mod container with full-width versions of the game's UI packages. The complete reverse-engineering breakdown is in **[RESEARCH.md](RESEARCH.md)**.
 
-`LiSUltrawidePatcher.exe` is a thin Windows front-end that runs `patcher.py`. It is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) by [the release workflow](.github/workflows/build.yml), which also builds the loader with `cargo build --release` (Rust stable, plus the Visual Studio Build Tools and a Windows SDK on Windows), and each release names the commit it was built from. To build the front-end yourself with the compiler that ships with Windows:
+Everything is Rust, in one workspace with no dependencies beyond the standard library:
+
+| Crate | What it is |
+| :--- | :--- |
+| [`crates/core`](crates/core) | The logic: the camera patch planner, the Oodle Kraken decoder, the IoStore and Zen package readers, the container writer, the UI slot edits, the `Engine.ini` block, and where games, Steam libraries and Wine prefixes are |
+| [`crates/loader`](crates/loader) | The library the game loads as `winhttp.dll`: it forwards that DLL's functions to the system copy and patches the game before its own code runs |
+| [`crates/installer`](crates/installer) | `lis-ultrawide-fix`, the command-line installer for Windows and Linux, with the loader embedded |
+
+`LiSUltrawidePatcher.exe` is a thin Windows window that runs `lis-ultrawide-fix.exe`; it is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) with the compiler that ships with Windows. [The release workflow](.github/workflows/build.yml) tests the workspace on Linux and Windows, builds the loader and the installers, and names the commit each release was built from. To build it yourself:
 
 ```
-%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32icon:LiSUltrawidePatcher.ico /out:LiSUltrawidePatcher.exe LiSUltrawidePatcher.cs /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
+cargo build --release -p lis-ultrawide-loader
+cargo build --release -p lis-ultrawide-fix
+%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32icon:LiSUltrawidePatcher.ico /out:LiSUltrawidePatcher.exe LiSUltrawidePatcher.cs /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll
 ```
+
+The loader goes first because the installer embeds it. `cargo test --release --workspace` runs the tests; the ones against the game's own files run where the game is installed and skip elsewhere.
 
 ---
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). The release archive contains its complete source: `LiSUltrawidePatcher.cs`, `patcher.py`, the loader's Rust crate and every module the fix runs. The bundled archive also contains python.org's embeddable Python, unmodified, under its own PSF license in `tools/python/`.
+This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). Each release archive contains its complete source: `LiSUltrawidePatcher.cs` and the Rust workspace. The Kraken decoder is a port of the Kraken parts of [ooz](https://github.com/powzix/ooz), Copyright (C) 2016 Powzix, under the same license.
 
 As an additional term under GPL-3.0 section 7(b), every copy or modified version must preserve the copyright notice and credit the original author, Kiri11, with a link to this project.

@@ -25,9 +25,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "lis_ultrawide_camera"
+name = "lis-ultrawide-core"
+version = "0.1.0"
+
+[[package]]
+name = "lis-ultrawide-fix"
 version = "0.1.0"
 dependencies = [
+ "lis-ultrawide-core",
+ "winresource",
+]
+
+[[package]]
+name = "lis-ultrawide-loader"
+version = "0.1.0"
+dependencies = [
+ "lis-ultrawide-core",
  "winresource",
 ]
 

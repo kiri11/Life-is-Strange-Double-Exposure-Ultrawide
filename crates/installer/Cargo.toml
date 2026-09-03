@@ -1,0 +1,18 @@
+[package]
+name = "lis-ultrawide-fix"
+description = "Installer for the Life is Strange ultrawide fix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "lis-ultrawide-fix"
+path = "src/main.rs"
+
+[dependencies]
+lis-ultrawide-core = { path = "../core" }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

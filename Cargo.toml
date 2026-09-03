@@ -1,8 +1,23 @@
-# The Rust parts of the fix. Today that is the camera loader alone; the
-# installer is patcher.py. Build everything with `cargo build --release`.
+# Everything the fix does, in one workspace:
+#   crates/core       the logic, portable: patch planning, container formats,
+#                     the Kraken decoder, game search, Engine.ini, Wine prefixes
+#   crates/loader     the DLL the game loads (installed as winhttp.dll)
+#   crates/installer  lis-ultrawide-fix, the command-line installer for
+#                     Windows and Linux; the loader DLL is embedded in it
+#
+# Build order matters once: the installer embeds the loader, so build the
+# loader first (cargo build --release -p lis-ultrawide-loader), then the
+# installer. Without a built loader the installer still compiles, says so at
+# build time, and refuses the camera step at run time.
 [workspace]
 resolver = "3"
-members = ["crates/camera"]
+members = ["crates/core", "crates/loader", "crates/installer"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
 
 [profile.release]
 opt-level = 3
