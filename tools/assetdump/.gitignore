@@ -1,9 +1,0 @@
-# A native Oodle library, if one is kept here for research runs (LISDE_OODLE_DLL).
-# Third-party, not redistributable: the fix itself decodes with kraken.py.
-oodle-data-shared.dll
-oo2core_*.dll
-*.so
-
-# Game-derived artifacts: regenerate locally, do not redistribute
-*.usmap
-*.log

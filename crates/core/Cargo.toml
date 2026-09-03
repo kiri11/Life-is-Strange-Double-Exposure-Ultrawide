@@ -1,0 +1,10 @@
+[package]
+name = "lis-ultrawide-core"
+description = "Everything the Life is Strange ultrawide fix does that is not talking to the operating system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "lis_ultrawide_core"
