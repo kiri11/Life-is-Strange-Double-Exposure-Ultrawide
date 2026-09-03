@@ -9,6 +9,7 @@
 //! Proton `compatdata/<appid>/pfx/drive_c/users/steamuser/AppData/Local/<project>/...`.
 
 pub mod double_exposure;
+pub mod reunion;
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +18,7 @@ use crate::scan::Image;
 use crate::ui_layout::UiFix;
 
 pub trait Game: Sync {
-    /// `"double-exposure"`: what `--game` takes.
+    /// `"double-exposure"` or `"reunion"`: what `--game` takes.
     fn id(&self) -> &'static str;
     fn title(&self) -> &'static str;
     fn steam_appid(&self) -> u32;
@@ -63,7 +64,7 @@ pub trait Game: Sync {
 }
 
 /// Every game the fix knows, in the order the installer offers them.
-pub static GAMES: &[&dyn Game] = &[&double_exposure::DOUBLE_EXPOSURE];
+pub static GAMES: &[&dyn Game] = &[&double_exposure::DOUBLE_EXPOSURE, &reunion::REUNION];
 
 pub fn game_for_exe(exe_name: &str) -> Option<&'static dyn Game> {
     GAMES.iter().copied().find(|g| g.exe_name().eq_ignore_ascii_case(exe_name))

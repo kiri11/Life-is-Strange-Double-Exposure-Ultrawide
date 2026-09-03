@@ -21,7 +21,8 @@
 // (crates/installer/src/main.rs states the same):
 //   - arguments: install|restore|status|find, --exe PATH, --width W,
 //     --height H, --yes, --no-camera, --no-ui, --no-chromatic-fix, --sharpen
-//   - "find" prints a "Game executable: <path>" line
+//   - "find" prints a "Game executable: <path>" line, and an "Also found:
+//     <title> (<path>)" line for every other installed game it knows
 //   - "status" prints "status:", "detail:", "files:" and "filesdetail:" lines
 //   - exit code 0 is success; 2 is a problem the user can act on
 //   - the output is UTF-8, whatever the console code page
@@ -455,17 +456,21 @@ namespace LiSUltrawidePatcher
             else
             {
                 string found = null, via = null;
+                var also = new List<string>();
                 string text = RunCli("find") ?? "";
                 foreach (string line in text.Split('\n'))
                 {
                     string t = line.Trim();
                     if (t.StartsWith("Game executable: ")) found = t.Substring(17).Trim();
                     else if (t.StartsWith("Found game via ")) via = t;
+                    else if (t.StartsWith("Also found: ")) also.Add(t.Substring(12).Trim());
                 }
                 if (found != null)
                 {
                     txtExePath.Text = found;
                     Log(via ?? "Found the game.");
+                    foreach (string a in also)
+                        Log("Also found " + a + " - use Browse... to pick that game instead.");
                 }
                 else
                 {

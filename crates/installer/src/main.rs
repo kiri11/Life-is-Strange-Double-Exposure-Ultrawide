@@ -25,6 +25,8 @@
 //! The Windows front-end (LiSUltrawidePatcher.cs) runs this binary and
 //! reads its output. Its contract, which a change to either side must keep:
 //! `status` prints `status:`, `detail:`, `files:` and `filesdetail:` lines;
+//! `find` prints `Game executable:` and one `Also found:` line per other
+//! installed game;
 //! the exit code is 0 for success, 1 for a usage problem or a game that was
 //! not found, 2 for an error the user can act on, 130 when cancelled; the
 //! output is UTF-8; the phrase "as administrator" in the output means a
@@ -87,7 +89,7 @@ Usage: lis-ultrawide-fix [install|restore|status|find] [options]
 
 Options:
   --exe PATH          the game executable (found automatically when omitted)
-  --game ID           which game: double-exposure (detected when omitted)
+  --game ID           which game: double-exposure or reunion (detected when omitted)
   --width W           display width, e.g. 5120 (detected when omitted)
   --height H          display height, e.g. 2160
   --yes, -y           accept the defaults, never ask, never open a dialog

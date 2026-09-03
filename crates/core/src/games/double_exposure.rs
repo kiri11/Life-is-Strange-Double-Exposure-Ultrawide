@@ -65,7 +65,7 @@ pub fn plan_double_exposure(img: &Image, upper: [u8; 4]) -> Result<Plan, String>
     // constraint on the camera's authored aspect and pins the FOV divisor.
     let gate = locate(img, &GATE, &mut notes)?;
     let blob_a = cave_a(upper);
-    let a = find_cave(img, blob_a.len() + 8, &[])
+    let a = find_cave(img, gate, blob_a.len() + 8, &[])
         .ok_or("no int3 padding run large enough for cave A")?;
     let mut site_a = vec![0xE8];
     site_a.extend_from_slice(&rel32(a, gate + 5)?.to_le_bytes());
@@ -94,7 +94,7 @@ pub fn plan_double_exposure(img: &Image, upper: [u8; 4]) -> Result<Plan, String>
     }
     let old_disp = i32::from_le_bytes(call_bytes[1..5].try_into().unwrap());
     let super_va = (call as i64 + 5 + old_disp as i64) as u64;
-    let b = find_cave(img, 18 + 8, &[(a, a_len)])
+    let b = find_cave(img, call, 18 + 8, &[(a, a_len)])
         .ok_or("no int3 padding run large enough for cave B")?;
     let blob_b = cave_b(rel32(super_va, b + 4 + 5)?);
     let b_len = blob_b.len();

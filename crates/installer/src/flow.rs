@@ -131,6 +131,14 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
             let pick = ui.choose("More than one game was found; which one", &items, Some(0)).ok_or(Fail::Cancelled)?;
             let (game, found) = &candidates[pick];
             out.line(&format!("Found game via {}", found.source));
+            if args.command == Command::Find {
+                // the front-end takes the first and tells the user about the rest
+                for (i, (g, f)) in candidates.iter().enumerate() {
+                    if i != pick {
+                        out.line(&format!("Also found: {} ({})", g.title(), f.exe.display()));
+                    }
+                }
+            }
             Ok((*game, found.exe.clone()))
         }
         _ => {
