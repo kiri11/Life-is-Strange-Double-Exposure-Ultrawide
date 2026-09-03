@@ -36,7 +36,10 @@ impl Report for Indent<'_> {
 enum Fail {
     Exit(i32),
     Cancelled,
+    /// Before any step ran: nothing was touched.
     Install(InstallError),
+    /// A step failed; the steps after it still ran.
+    Step(InstallError),
 }
 
 impl From<InstallError> for Fail {
@@ -48,7 +51,7 @@ impl From<InstallError> for Fail {
 type R<T> = Result<T, Fail>;
 
 pub fn run(args: Args) -> i32 {
-    let asks = matches!(args.command, Command::Interactive) || (args.command == Command::Install && !args.yes);
+    let asks = matches!(args.command, Command::Interactive | Command::Install) && !args.yes;
     let mut ui: Box<dyn Ui> = if !asks {
         Box::new(ui::Silent)
     } else if ui::console_available() {
@@ -76,6 +79,13 @@ pub fn run(args: Args) -> i32 {
             out.line(&format!("Error: {e}"));
             out.line("");
             out.line("Nothing was left half-applied - the game is as it was before this run.");
+            2
+        }
+        Err(Fail::Step(e)) => {
+            out.line("");
+            out.line(&format!("Error: {e}"));
+            out.line("");
+            out.line("The other steps went through. Fix the problem above and run this again; a second run redoes every step.");
             2
         }
     };
@@ -257,18 +267,35 @@ fn run_install(
     out: &mut Out,
 ) -> R<i32> {
     let paks = game.paks_dir(exe);
+    // The steps are independent, so one failing does not stop the others:
+    // a restore that cannot touch the game data still takes the Engine.ini
+    // block out, and the first failure is what the run reports at the end.
+    let mut failed: Option<InstallError> = None;
+    let mut step = |out: &mut Out, result: Result<(), InstallError>| {
+        if let Err(e) = result {
+            out.line(&format!("  Error: {e}"));
+            failed.get_or_insert(e);
+        }
+    };
     if restore {
         out.line("");
         out.line("Restoring everything to stock...");
         if parts.camera {
-            loader_install::remove_camera(game, exe, engine_ini, out)?;
+            let r = loader_install::remove_camera(game, exe, engine_ini, out);
+            step(out, r);
         }
         if parts.ui
-            && let (Some(fix), Some(paks)) = (game.ui(), &paks) {
-                ui_layout::restore_ui(paks, fix, &mut Indent(out))?;
-            }
+            && let (Some(fix), Some(paks)) = (game.ui(), &paks)
+        {
+            let r = ui_layout::restore_ui(paks, fix, &mut Indent(out));
+            step(out, r);
+        }
         if parts.chromatic || parts.sharpen {
-            engine_ini::apply_engine_ini(game, Some(exe), width, height, false, false, true, engine_ini, out)?;
+            let r = engine_ini::apply_engine_ini(game, Some(exe), width, height, false, false, true, engine_ini, out);
+            step(out, r.map(|_| ()));
+        }
+        if let Some(e) = failed {
+            return Err(Fail::Step(e));
         }
         out.line("");
         out.line("Done - the game is back to its shipped state.");
@@ -281,7 +308,8 @@ fn run_install(
     out.line("");
     out.line("[1/3] Ultrawide camera (loader library)");
     if parts.camera {
-        loader_install::install_camera(game, exe, shipped_loader(), explicit, engine_ini, out)?;
+        let r = loader_install::install_camera(game, exe, shipped_loader(), explicit, engine_ini, out);
+        step(out, r);
     } else {
         out.line("  skipped");
     }
@@ -290,7 +318,10 @@ fn run_install(
     out.line("[2/3] Full-width UI (game files)");
     if parts.ui {
         match (game.ui(), &paks) {
-            (Some(fix), Some(paks)) => ui_layout::install_ui(paks, fix, width, height, &mut Indent(out))?,
+            (Some(fix), Some(paks)) => {
+                let r = ui_layout::install_ui(paks, fix, width, height, &mut Indent(out));
+                step(out, r);
+            }
             _ => out.line("  not available for this game"),
         }
     } else {
@@ -300,11 +331,15 @@ fn run_install(
     out.line("");
     out.line("[3/3] Display tweaks (Engine.ini)");
     if parts.chromatic || parts.sharpen {
-        engine_ini::apply_engine_ini(game, Some(exe), width, height, parts.chromatic, parts.sharpen, false, engine_ini, out)?;
+        let r = engine_ini::apply_engine_ini(game, Some(exe), width, height, parts.chromatic, parts.sharpen, false, engine_ini, out);
+        step(out, r.map(|_| ()));
     } else {
         out.line("  skipped");
     }
 
+    if let Some(e) = failed {
+        return Err(Fail::Step(e));
+    }
     out.line("");
     out.line(&"=".repeat(60));
     out.line(" Done.");

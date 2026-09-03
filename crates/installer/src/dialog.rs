@@ -1,8 +1,10 @@
 //! Questions through a desktop dialog tool, for a double-click in a file
 //! manager where there is no terminal: what a Steam Deck user in Desktop
-//! mode will do. One abstraction, two dialects: zenity (which yad copies)
-//! and kdialog. Both report yes/no in the exit code and print a choice on
-//! standard output. X11 or Wayland makes no difference.
+//! mode will do. One abstraction, three dialects: zenity, yad (a zenity
+//! descendant with its own option names: no `--question`, `--no-headers`
+//! for a list, buttons declared by hand) and kdialog. All three report
+//! yes/no in the exit code and print a choice on standard output. X11 or
+//! Wayland makes no difference.
 //!
 //! Probe order, by presence on the PATH, with no desktop detection beyond
 //! one variable: on KDE (`XDG_CURRENT_DESKTOP` contains `KDE`) kdialog,
@@ -59,17 +61,21 @@ impl Dialog {
         Some((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).trim().to_string()))
     }
 
+    /// The transcript holds game paths, which zenity and yad would otherwise
+    /// read as Pango markup: an `&` in a folder name blanks the dialog.
     fn message(&self, text: &str, error: bool) {
         let args: Vec<String> = match self.kind {
             Kind::Zenity => vec![
                 if error { "--error" } else { "--info" }.into(),
                 format!("--title={}", self.title),
                 "--width=520".into(),
+                "--no-markup".into(),
                 format!("--text={text}"),
             ],
             Kind::Yad => vec![
                 format!("--title={}", self.title),
                 "--width=520".into(),
+                "--no-markup".into(),
                 format!("--image={}", if error { "dialog-error" } else { "dialog-information" }),
                 format!("--text={text}"),
                 "--button=OK:0".into(),
@@ -87,13 +93,21 @@ impl Dialog {
 impl Ui for Dialog {
     fn ask_yes(&mut self, question: &str, default: bool) -> Option<bool> {
         let args: Vec<String> = match self.kind {
-            Kind::Zenity | Kind::Yad => {
+            Kind::Zenity => {
                 let mut a = vec!["--question".to_string(), format!("--title={}", self.title), "--width=520".into(), format!("--text={question}")];
-                if !default && self.kind == Kind::Zenity {
+                if !default {
                     a.push("--default-cancel".into());
                 }
                 a
             }
+            Kind::Yad => vec![
+                format!("--title={}", self.title),
+                "--width=520".into(),
+                "--image=dialog-question".into(),
+                format!("--text={question}"),
+                "--button=Yes:0".into(),
+                "--button=No:1".into(),
+            ],
             Kind::Kdialog => vec![
                 format!("--title={}", self.title),
                 if default { "--yesno" } else { "--warningyesno" }.into(),
@@ -117,7 +131,7 @@ impl Ui for Dialog {
                     "--height=420".into(),
                     format!("--text={title}"),
                     "--column=Choice".into(),
-                    "--hide-header".into(),
+                    if self.kind == Kind::Zenity { "--hide-header" } else { "--no-headers" }.into(),
                 ];
                 a.extend(items.iter().cloned());
                 a
@@ -141,7 +155,11 @@ impl Ui for Dialog {
         }
         match self.kind {
             Kind::Kdialog => out.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).filter(|&i| i < items.len()),
-            _ => items.iter().position(|i| *i == out).or_else(|| items.iter().position(|i| out.starts_with(i.as_str()))),
+            // yad ends every row it prints with its column separator, `|`
+            _ => {
+                let out = out.trim_end_matches('|');
+                items.iter().position(|i| i == out).or_else(|| items.iter().position(|i| out.starts_with(i.as_str())))
+            }
         }
     }
 

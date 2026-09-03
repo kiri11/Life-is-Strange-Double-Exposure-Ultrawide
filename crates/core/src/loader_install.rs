@@ -17,7 +17,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::games::Game;
-use crate::report::{InstallError, Report, Result, replace_file, write_failure};
+use crate::report::{InstallError, Report, Result, replace_file, replace_file_from, write_failure};
 use crate::wine;
 
 /// In the loader's version resource: how the fix's DLL is told from
@@ -206,10 +206,24 @@ pub fn build_identity(path: &Path) -> Option<(u64, u32, u32)> {
     Some((size, at(pe + 8), at(pe + 24 + 56)))
 }
 
+/// Two files with the same bytes, compared a megabyte at a time: one of
+/// them is the game's executable.
 fn same_file_bytes(a: &Path, b: &Path) -> bool {
-    match (std::fs::read(a), std::fs::read(b)) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => false,
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else { return false };
+    if ma.len() != mb.len() {
+        return false;
+    }
+    let (Ok(mut fa), Ok(mut fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else { return false };
+    let mut x = vec![0u8; 1 << 20];
+    let mut y = vec![0u8; 1 << 20];
+    loop {
+        let Ok(n) = fa.read(&mut x) else { return false };
+        if n == 0 {
+            return true;
+        }
+        if fb.read_exact(&mut y[..n]).is_err() || x[..n] != y[..n] {
+            return false;
+        }
     }
 }
 
@@ -236,8 +250,7 @@ pub fn retire_exe_patch(exe: &Path, r: &mut dyn Report) -> Result<()> {
         r.line("  the executable is already the stock one");
     } else {
         r.line(&format!("  an older version of this fix edited the executable - putting the stock file back from {name}"));
-        let stock = std::fs::read(&backup).map_err(|e| InstallError(format!("could not read {name} ({e})")))?;
-        replace_file(exe, &stock)?;
+        replace_file_from(exe, &backup)?;
     }
     match std::fs::remove_file(&backup) {
         Ok(()) => r.line(&format!("  removed {name} - the loader needs no backup")),

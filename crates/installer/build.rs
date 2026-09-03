@@ -35,20 +35,24 @@ fn main() {
             }
         }
     }
-    let mut found: Option<&Path> = None;
-    for c in &candidates {
-        println!("cargo:rerun-if-changed={}", c.display());
-        if found.is_none() && c.is_file() {
-            found = Some(c);
-        }
-    }
+    let found: Option<&Path> = candidates.iter().map(PathBuf::as_path).find(|c| c.is_file());
     let dest = out_dir.join("loader.dll");
     match found {
         Some(p) => {
+            // Watch the one that was embedded. Cargo treats a missing
+            // rerun-if-changed path as always changed, so naming every
+            // candidate would rebuild and relink the installer every time.
+            println!("cargo:rerun-if-changed={}", p.display());
             std::fs::copy(p, &dest).expect("copy the loader DLL");
             println!("cargo:warning=embedding the loader from {}", p.display());
         }
         None => {
+            // Nothing to embed yet: watch every place one could appear, which
+            // re-runs this until a loader is built (the placeholder state
+            // costs a rebuild per build, and is never what ships).
+            for c in &candidates {
+                println!("cargo:rerun-if-changed={}", c.display());
+            }
             std::fs::write(&dest, []).expect("write an empty loader placeholder");
             println!(
                 "cargo:warning=no loader DLL found (build it first: cargo build --release -p lis-ultrawide-loader, \

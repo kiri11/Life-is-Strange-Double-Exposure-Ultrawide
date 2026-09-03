@@ -143,8 +143,16 @@ pub fn apply_dll_override(game: &dyn Game, exe: &Path, dll: &str, engine_ini: Op
         ));
     }
     let bytes = std::fs::read(&reg).map_err(|e| InstallError(format!("could not read {} ({e})", reg.display())))?;
-    let text = String::from_utf8_lossy(&bytes);
+    // The whole hive is rewritten, so every byte that is not ours has to
+    // come back out as it went in. Wine writes UTF-8; should the file hold
+    // anything else, it is edited byte for byte as Latin-1 (what Python's
+    // surrogateescape did), which the ASCII we add never disturbs.
+    let (text, latin1) = match String::from_utf8(bytes) {
+        Ok(s) => (s, false),
+        Err(e) => (e.into_bytes().iter().map(|&b| b as char).collect::<String>(), true),
+    };
     let new = set_dll_override(&text, game, dll, remove);
+    let encoded: Vec<u8> = if latin1 { new.chars().map(|c| c as u32 as u8).collect() } else { new.clone().into_bytes() };
     if new == text {
         r.line(&format!(
             "  Wine prefix: {dll} {} already",
@@ -152,7 +160,7 @@ pub fn apply_dll_override(game: &dyn Game, exe: &Path, dll: &str, engine_ini: Op
         ));
         return Ok(());
     }
-    replace_file(&reg, new.as_bytes())?;
+    replace_file(&reg, &encoded)?;
     r.line(&format!(
         "  Wine prefix: {dll} {} in {}",
         if remove { "override removed" } else { "set to native for the game" },

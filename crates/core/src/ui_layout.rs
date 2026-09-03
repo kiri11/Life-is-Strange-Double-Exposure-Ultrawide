@@ -265,12 +265,14 @@ pub fn undo_in_place_patch(paks: &Path, ui: &UiFix) -> Result<Option<String>> {
     let record = read_record(&sidecar);
     let io = |e: std::io::Error| InstallError(format!("could not read the game data ({e})"));
 
+    // an empty or zero value in the sidecar counts as absent, as it did for
+    // the Python that wrote it
     let mut stale = false;
-    if let Some(want) = &record.utoc_sha256 {
-        stale |= sha256_file(&backup, None).map_err(io)? != *want;
+    if let Some(want) = record.utoc_sha256.as_deref().filter(|s| !s.is_empty()) {
+        stale |= sha256_file(&backup, None).map_err(io)? != want;
     }
-    if let Some(want) = &record.ucas_head {
-        stale |= sha256_file(&ucas, Some(HEAD)).map_err(io)? != *want;
+    if let Some(want) = record.ucas_head.as_deref().filter(|s| !s.is_empty()) {
+        stale |= sha256_file(&ucas, Some(HEAD)).map_err(io)? != want;
     }
     if stale {
         // The game was updated over the top of it: that backup belongs to a
@@ -289,7 +291,7 @@ pub fn undo_in_place_patch(paks: &Path, ui: &UiFix) -> Result<Option<String>> {
     }
 
     std::fs::copy(&backup, &utoc).map_err(|e| InstallError(write_failure(&utoc, &e)))?;
-    if let Some(original) = record.ucas_size
+    if let Some(original) = record.ucas_size.filter(|&n| n > 0)
         && std::fs::metadata(&ucas).map_err(io)?.len() > original {
             let f = std::fs::OpenOptions::new().write(true).open(&ucas).map_err(|e| InstallError(write_failure(&ucas, &e)))?;
             f.set_len(original).map_err(|e| InstallError(write_failure(&ucas, &e)))?;
@@ -403,7 +405,11 @@ pub fn build_mod(paks: &Path, ui: &UiFix, design_w: f64, so: &ScriptObjects, r: 
             failed += 1;
             continue;
         };
-        let chunk_id = toc.chunk_ids[idx];
+        let Some(&chunk_id) = toc.chunk_ids.get(idx) else {
+            r.line(&format!("  SKIP {:<34} directory index points past the chunk table", name));
+            failed += 1;
+            continue;
+        };
         let package_id = package_id_of(&chunk_id);
         let Some(entry) = stock_entries.get(&package_id) else {
             r.line(&format!("  SKIP {:<34} no package store entry", name));

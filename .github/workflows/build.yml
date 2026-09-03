@@ -102,6 +102,17 @@ jobs:
           Write-Host $banner
           if ($banner -notmatch 'embedded') { throw 'the installer was built without the loader' }
           if ($banner -notmatch [regex]::Escape($env:VERSION)) { throw 'the installer does not carry the release version' }
+          # The installer has no Cargo dependency on the loader, so it embeds
+          # whatever DLL it finds; check it is the one this job just built.
+          $loader = (Get-FileHash target/release/lis_ultrawide_loader.dll -Algorithm SHA256).Hash.Substring(0, 16).ToLower()
+          if ($banner -notmatch $loader) { throw "the installer embeds a loader other than the one just built (want sha256 $loader)" }
+          # crt-static comes from .cargo/config.toml, which a RUSTFLAGS in the
+          # environment would silently override: neither binary may import
+          # the Visual C++ runtime.
+          foreach ($f in 'target/release/lis-ultrawide-fix.exe', 'target/release/lis_ultrawide_loader.dll') {
+            $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($f))
+            if ($text -match 'VCRUNTIME|MSVCP1|api-ms-win-crt') { throw "$f imports the Visual C++ runtime" }
+          }
 
       # The stock .NET Framework compiler, present on every Windows image and on
       # every Windows the fix targets. No SDK, no csproj, no restore step. Keep
@@ -176,6 +187,8 @@ jobs:
           echo "$banner"
           echo "$banner" | grep -q embedded || { echo 'the installer was built without the loader'; exit 1; }
           echo "$banner" | grep -qF "$VERSION" || { echo 'the installer does not carry the release version'; exit 1; }
+          loader=$(sha256sum "$LIS_LOADER_DLL" | cut -c1-16)
+          echo "$banner" | grep -qF "$loader" || { echo "the installer embeds a loader other than the artifact (want sha256 $loader)"; exit 1; }
       # A tarball, so the execute bit survives the trip.
       - name: Stage the Linux archive
         run: |

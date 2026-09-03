@@ -1,3 +1,6 @@
 # Built by cargo, and by .github/workflows/build.yml; never committed
 /target/
 /LiSUltrawidePatcher.exe
+# Research leftovers from the Python era (Mappings.usmap, the Oodle DLL,
+# probe logs), kept locally and never committed
+/tools/assetdump/

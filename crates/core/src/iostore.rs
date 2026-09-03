@@ -205,7 +205,9 @@ impl Toc {
 
     /// Chunk `i`, decompressed.
     pub fn read(&mut self, i: usize) -> Result<Vec<u8>, ReadError> {
-        let (off, len) = self.offlen[i];
+        // the index comes from the directory index, which a foreign container
+        // need not keep in step with its chunk table
+        let &(off, len) = self.offlen.get(i).ok_or_else(|| ReadError::Format(format!("chunk {i} is past the chunk table")))?;
         if len == 0 {
             return Ok(Vec::new());
         }
@@ -238,7 +240,7 @@ impl Toc {
     /// The compressed blocks of every chunk, decoded one by one: what the
     /// research check runs over the game's own containers.
     pub fn read_block(&mut self, bi: usize) -> Result<Vec<u8>, ReadError> {
-        let b = self.blocks[bi];
+        let b = *self.blocks.get(bi).ok_or_else(|| ReadError::Format(format!("block {bi} is past the table")))?;
         self.ucas.seek(SeekFrom::Start(b.offset))?;
         let mut data = vec![0u8; b.compressed as usize];
         self.ucas.read_exact(&mut data)?;

@@ -42,13 +42,14 @@ pub type Stats = BTreeMap<String, u32>;
 
 /// Decode a Kraken stream that expands to exactly `dst_len` bytes.
 pub fn decompress(src: &[u8], dst_len: usize) -> R<Vec<u8>> {
-    decompress_with_stats(src, dst_len).map(|(out, _)| out)
+    Dec { buf: src, stats: None }.decompress(dst_len)
 }
 
+/// `decompress`, and the code paths it went through.
 pub fn decompress_with_stats(src: &[u8], dst_len: usize) -> R<(Vec<u8>, Stats)> {
-    let mut d = Dec { buf: src, stats: Stats::new() };
+    let mut d = Dec { buf: src, stats: Some(Stats::new()) };
     let out = d.decompress(dst_len)?;
-    Ok((out, d.stats))
+    Ok((out, d.stats.unwrap_or_default()))
 }
 
 // ---------------------------------------------------------------- helpers
@@ -705,12 +706,15 @@ type TansEntry = (u32, i64, u8, u32);
 
 struct Dec<'a> {
     buf: &'a [u8],
-    stats: Stats,
+    /// Only the test-suite asks for these; a plain decode builds no keys.
+    stats: Option<Stats>,
 }
 
 impl<'a> Dec<'a> {
-    fn hit(&mut self, key: String) {
-        *self.stats.entry(key).or_insert(0) += 1;
+    fn hit(&mut self, key: impl FnOnce() -> String) {
+        if let Some(stats) = &mut self.stats {
+            *stats.entry(key()).or_insert(0) += 1;
+        }
     }
 
     fn b(&self, i: i64) -> u32 {
@@ -747,10 +751,10 @@ impl<'a> Dec<'a> {
         let mut code_prefix = CODE_PREFIX_ORG;
         let mut syms = vec![0u8; 1280];
         let num_syms = if bits.read_bit_no_refill() == 0 {
-            self.hit("huff:old".into());
+            self.hit(|| "huff:old".into());
             read_code_lengths_old(&mut bits, &mut syms, &mut code_prefix)?
         } else if bits.read_bit_no_refill() == 0 {
-            self.hit("huff:new".into());
+            self.hit(|| "huff:new".into());
             read_code_lengths_new(&mut bits, &mut syms, &mut code_prefix)?
         } else {
             return err("bad Huffman header");
@@ -1275,7 +1279,7 @@ impl<'a> Dec<'a> {
             if src_size > output_size || src_end - src < src_size {
                 return err("bad block");
             }
-            self.hit("block:0".into());
+            self.hit(|| "block:0".into());
             return Ok((src + src_size - src_org, self.slice(src, src_size)?.to_vec()));
         }
 
@@ -1305,7 +1309,7 @@ impl<'a> Dec<'a> {
         }
 
         let mut out = vec![0u8; dst_size as usize];
-        self.hit(format!("block:{chunk_type}"));
+        self.hit(|| format!("block:{chunk_type}"));
         let used = match chunk_type {
             2 | 4 => self.decode_bytes_type12(src, src_size, &mut out, dst_size as usize, chunk_type >> 1)?,
             5 => self.decode_recursive(src, src_size, &mut out, dst_size as usize)?,
@@ -1367,7 +1371,7 @@ impl<'a> Dec<'a> {
         let num_arrays_in_file = num_arrays_in_file as usize;
 
         let mut total_size: i64 = 0;
-        self.hit(format!("multi:{}", if num_arrays_in_file == 0 { "plain" } else { "interleaved" }));
+        self.hit(|| format!("multi:{}", if num_arrays_in_file == 0 { "plain" } else { "interleaved" }));
         if num_arrays_in_file == 0 {
             let mut arrays = Vec::new();
             for _ in 0..array_count {
@@ -1549,7 +1553,7 @@ impl<'a> Dec<'a> {
 
         let mut offs: Vec<i64> = Vec::with_capacity(packed_offs.len());
         let count = packed_offs.len();
-        self.hit(format!(
+        self.hit(|| format!(
             "offsets:{}",
             if multi_dist_scale == 0 { "classic".to_string() } else { format!("scaled{multi_dist_scale}") }
         ));
@@ -1831,7 +1835,7 @@ impl<'a> Dec<'a> {
             let src_used: i64;
             if chunkhdr & 0x800000 == 0 {
                 // entropy coded, no match copying
-                self.hit("quantum:entropy".into());
+                self.hit(|| "quantum:entropy".into());
                 let (used, data) = self.decode_bytes(src, src_end, dst_count as i64)?;
                 if data.len() != dst_count {
                     return err("bad quantum");
@@ -1846,14 +1850,14 @@ impl<'a> Dec<'a> {
                     return err("truncated quantum");
                 }
                 if src_used < dst_count as i64 {
-                    self.hit(format!("lz:{mode}"));
+                    self.hit(|| format!("lz:{mode}"));
                     let (cmd, offs, lit, lens) =
                         self.read_lz_table(mode, src, src + src_used, out, dst, dst_count, dst - dst_start)?;
                     self.process_lz_runs(mode, out, dst, dst_count, dst - dst_start, &cmd, &offs, &lit, &lens)?;
                 } else if src_used > dst_count as i64 || mode != 0 {
                     return err("bad quantum");
                 } else {
-                    self.hit("quantum:raw".into());
+                    self.hit(|| "quantum:raw".into());
                     out[dst..dst + dst_count].copy_from_slice(self.slice(src, dst_count as i64)?);
                 }
             }
@@ -1926,7 +1930,7 @@ impl<'a> Dec<'a> {
             let (uncompressed, use_checksums) = hdr.ok_or_else(|| KrakenError("missing header".into()))?;
             let dst_bytes_left = (dst_len - offset).min(0x40000);
             if uncompressed {
-                self.hit("stream:uncompressed".into());
+                self.hit(|| "stream:uncompressed".into());
                 if src_len - p < dst_bytes_left as i64 {
                     return err("truncated stream");
                 }
@@ -1944,10 +1948,10 @@ impl<'a> Dec<'a> {
                 return err("bad quantum header");
             }
             if compressed_size == 0 {
-                self.hit("stream:memset".into());
+                self.hit(|| "stream:memset".into());
                 out[offset..offset + dst_bytes_left].fill(memset_byte.unwrap_or(0));
             } else if compressed_size == dst_bytes_left as i64 {
-                self.hit("stream:stored".into());
+                self.hit(|| "stream:stored".into());
                 out[offset..offset + dst_bytes_left].copy_from_slice(self.slice(p, dst_bytes_left as i64)?);
                 p += dst_bytes_left as i64;
             } else {
