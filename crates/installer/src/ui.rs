@@ -38,18 +38,23 @@ pub trait Ui {
             })
             .collect();
         let detected_index = PRESETS.iter().position(|(_, w, h)| detected == Some((*w, *h)));
-        let custom = items.len();
-        items.push(match detected {
-            Some((w, h)) if detected_index.is_none() => format!("Detected: {w}x{h}"),
-            _ => "Custom...".to_string(),
-        });
-        let default = detected_index.or(detected.map(|_| custom));
+        // a detected display that is no preset gets its own entry, and
+        // "Custom..." is always last, which is what the console's "c" picks
+        let detected_entry = match detected {
+            Some((w, h)) if detected_index.is_none() => {
+                items.push(format!("Detected: {w}x{h}"));
+                Some(items.len() - 1)
+            }
+            _ => None,
+        };
+        items.push("Custom...".to_string());
+        let default = detected_index.or(detected_entry);
         let picked = self.choose("Select your display resolution", &items, default)?;
-        if picked < custom {
+        if picked < PRESETS.len() {
             return Some((PRESETS[picked].1, PRESETS[picked].2));
         }
-        if let (Some(d), None) = (detected, detected_index) {
-            return Some(d);
+        if Some(picked) == detected_entry {
+            return detected;
         }
         loop {
             let text = self.ask_text("Resolution, as WIDTHxHEIGHT (for example 5120x2160)")?;
@@ -87,8 +92,10 @@ impl Ui for Silent {
     }
 }
 
+/// A terminal to read answers from. Only standard input has to be one:
+/// piping the output through `tee` for a bug report still asks.
 pub fn console_available() -> bool {
-    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+    std::io::stdin().is_terminal()
 }
 
 /// Questions on the terminal, answers from standard input.

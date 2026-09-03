@@ -81,13 +81,20 @@ pub fn write_failure(path: &std::path::Path, err: &std::io::Error) -> String {
 
 /// Write through a temporary file, so a failure never leaves half a file.
 pub fn replace_file(path: &std::path::Path, data: &[u8]) -> Result<()> {
+    replace_via_tmp(path, |tmp| std::fs::write(tmp, data))
+}
+
+/// `replace_file` with the bytes of another file, streamed rather than read
+/// into memory.
+pub fn replace_file_from(path: &std::path::Path, source: &std::path::Path) -> Result<()> {
+    replace_via_tmp(path, |tmp| std::fs::copy(source, tmp).map(|_| ()))
+}
+
+fn replace_via_tmp(path: &std::path::Path, write: impl FnOnce(&std::path::Path) -> std::io::Result<()>) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp);
-    let attempt = (|| {
-        std::fs::write(&tmp, data)?;
-        std::fs::rename(&tmp, path)
-    })();
+    let attempt = write(&tmp).and_then(|()| std::fs::rename(&tmp, path));
     if let Err(err) = attempt {
         let _ = std::fs::remove_file(&tmp);
         return Err(InstallError(write_failure(path, &err)));

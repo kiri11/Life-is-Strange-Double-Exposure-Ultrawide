@@ -129,7 +129,7 @@ The loader writes `LiSUltrawideCamera.log` next to itself at every launch, sayin
 
 The fix changes a handful of bytes in the game's code, in memory at every launch, to force Unreal Engine's built-in Hor+ projection for every camera, and adds a small mod container with full-width versions of the game's UI packages. The complete reverse-engineering breakdown is in **[RESEARCH.md](RESEARCH.md)**.
 
-Everything is Rust, in one workspace with no dependencies beyond the standard library:
+Everything is Rust, in one workspace. The only crates it pulls in are pure Rust: `blake3`, `sha1` and `sha2` for the three digests the container formats use, and `winresource` at build time for the Windows version resources. Nothing is needed at run time beyond the operating system:
 
 | Crate | What it is |
 | :--- | :--- |

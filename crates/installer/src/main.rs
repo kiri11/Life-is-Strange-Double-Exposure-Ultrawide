@@ -37,7 +37,7 @@ mod ui;
 
 use std::path::PathBuf;
 
-use lis_ultrawide_core::VERSION;
+use lis_ultrawide_core::{VERSION, hash, to_hex};
 
 /// The loader DLL, embedded by build.rs; empty when the build had none.
 static LOADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/loader.dll"));
@@ -175,7 +175,13 @@ pub fn parse_args(argv: &[String]) -> Result<Args, String> {
 }
 
 fn main() {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let argv: Vec<String> = match std::env::args_os().skip(1).map(|a| a.into_string()).collect() {
+        Ok(v) => v,
+        Err(bad) => {
+            eprintln!("lis-ultrawide-fix: the argument {bad:?} is not valid Unicode");
+            std::process::exit(1);
+        }
+    };
     let args = match parse_args(&argv) {
         Ok(a) => a,
         Err(e) => {
@@ -189,10 +195,11 @@ fn main() {
         return;
     }
     if args.version {
+        // the release workflow matches the digest against the DLL it built
         println!(
             "LiS Ultrawide Fix {VERSION} (loader: {})",
             match shipped_loader() {
-                Some(l) => format!("embedded, {} KB", l.len() / 1024),
+                Some(l) => format!("embedded, {} KB, sha256 {}", l.len() / 1024, &to_hex(&hash::sha256(l))[..16]),
                 None => "not embedded".to_string(),
             }
         );
