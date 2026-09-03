@@ -170,7 +170,7 @@ jobs:
           cargo build --release -p lis-ultrawide-fix --target x86_64-unknown-linux-musl
           bin=target/x86_64-unknown-linux-musl/release/lis-ultrawide-fix
           file "$bin"
-          file "$bin" | grep -q 'statically linked' || { echo 'the installer is not static'; exit 1; }
+          file "$bin" | grep -Eq 'statically linked|static-pie linked' || { echo 'the installer is not static'; exit 1; }
           if ldd "$bin" 2>/dev/null | grep -q '=>'; then echo 'the installer links shared libraries'; exit 1; fi
           banner=$("$bin" --version)
           echo "$banner"
