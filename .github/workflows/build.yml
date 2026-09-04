@@ -21,6 +21,14 @@ on:
 permissions:
   contents: write
 
+# Hold the lock from version allocation through both builds and publication.
+# PR and manual runs do not publish, so each gets an independent group.
+# Queue pushes instead of replacing an older pending release (up to 100).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'release-main' || github.run_id }}
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   # The Kraken decoder, the container writer and the path search have to
   # behave the same on every platform the fix claims, so the whole workspace
@@ -40,12 +48,6 @@ jobs:
   build-windows:
     needs: test
     runs-on: windows-latest
-    # Two builds at once would read the same tag list below and pick the same
-    # number, so they take their turn instead. Never cancel: a queued push has
-    # a release of its own to cut.
-    concurrency:
-      group: release
-      cancel-in-progress: false
     outputs:
       version: ${{ steps.version.outputs.version }}
 
@@ -244,4 +246,5 @@ jobs:
           Nothing is downloaded and nothing is installed system-wide; each archive holds the whole fix and its source.
 
           Built from \`${{ github.sha }}\` by [this run]($run)."
-          gh release create "$tag" LiS-Ultrawide-Fix-Windows.zip LiS-Ultrawide-Fix-Linux.tar.gz --title "$tag" --notes "$notes"
+          # main may have advanced while this run waited; tag the built commit.
+          gh release create "$tag" LiS-Ultrawide-Fix-Windows.zip LiS-Ultrawide-Fix-Linux.tar.gz --target "${{ github.sha }}" --title "$tag" --notes "$notes"
