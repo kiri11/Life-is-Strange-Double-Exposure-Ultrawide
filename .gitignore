@@ -4,3 +4,4 @@
 # Research leftovers from the Python era (Mappings.usmap, the Oodle DLL,
 # probe logs), kept locally and never committed
 /tools/assetdump/
+.idea
