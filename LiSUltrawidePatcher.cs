@@ -665,8 +665,8 @@ namespace LiSUltrawidePatcher
                     UsePicker();
                     foreach (ExeItem item in found) cmbExe.Items.Add(item);
                     FitDropDown();
-                    Log("Found " + JoinAnd(CountedNames()) + " - pick the one to fix from the "
-                        + "list. Each is fixed on its own: Install once for each.");
+                    Log("Found " + JoinAnd(CountedNames()) + ", pick one to fix.");
+                    Log("Each is fixed on its own: Install once for each.");
                     if (via != null) Log(via + " (" + found[0].Short + ")");
                     foreach (string n in notes) Log(n);
                     cmbExe.SelectedIndex = 0;
