@@ -21,6 +21,9 @@ pub trait Game: Sync {
     /// `"double-exposure"` or `"reunion"`: what `--game` takes.
     fn id(&self) -> &'static str;
     fn title(&self) -> &'static str;
+    /// `"Double Exposure"`: the title without the series name, for lists
+    /// and headings that name several games at once.
+    fn short_title(&self) -> &'static str;
     fn steam_appid(&self) -> u32;
     /// `"Chronos-Win64-Shipping.exe"`: the loader does nothing in any other process.
     fn exe_name(&self) -> &'static str;

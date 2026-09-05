@@ -151,6 +151,9 @@ impl Game for Reunion {
     fn title(&self) -> &'static str {
         "Life is Strange: Reunion"
     }
+    fn short_title(&self) -> &'static str {
+        "Reunion"
+    }
     fn steam_appid(&self) -> u32 {
         2624870
     }

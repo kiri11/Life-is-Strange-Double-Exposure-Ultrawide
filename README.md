@@ -18,14 +18,14 @@ The game's own files are never modified: the camera fix is a small library the g
 
 1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix-Windows.zip)** and unpack the zip anywhere.
 2. Run **`LiSUltrawidePatcher.exe`**.
-3. It finds your game and your display automatically. If it does not find the game, click **Browse...** and select the game executable. With both games installed it picks Double Exposure and says where the other one is; **Browse...** to that executable switches to it.
+3. It finds your game and your display automatically. If it does not find the game, click **Browse...** and select the game executable. With more than one game installed, the executable field becomes a list: pick the game to fix, and run **Install** once for each game. The window title says which game is selected.
 4. Leave the options ticked and click **Install**.
 
 That is it. Start the game and play.
 
 **Windows will warn you the first time.** The program is not code-signed, so SmartScreen shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**. Some antivirus tools also flag it, as they do most unsigned game mods. The program is built by GitHub Actions from the source in this repository, so you can check exactly what it does.
 
-The window is a front-end for `lis-ultrawide-fix.exe`, the installer in the same folder, which also works on its own from a command prompt (see the Linux section for its commands).
+The window is a front-end for `cli\lis-ultrawide-fix.exe`, the installer in the `cli` folder next to it, which also works on its own from a command prompt (see the Linux section for its commands).
 
 ### After a game update
 
@@ -140,7 +140,7 @@ Everything is Rust, in one workspace. The only crates it pulls in are pure Rust:
 | [`crates/loader`](crates/loader) | The library the game loads as `winhttp.dll`: it forwards that DLL's functions to the system copy and patches the game before its own code runs |
 | [`crates/installer`](crates/installer) | `lis-ultrawide-fix`, the command-line installer for Windows and Linux, with the loader embedded |
 
-`LiSUltrawidePatcher.exe` is a thin Windows window that runs `lis-ultrawide-fix.exe`; it is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) with the compiler that ships with Windows. [The release workflow](.github/workflows/build.yml) tests the workspace on Linux and Windows, builds the loader and the installers, and names the commit each release was built from. To build it yourself:
+`LiSUltrawidePatcher.exe` is a thin Windows window that runs `lis-ultrawide-fix.exe`, which it looks for in a `cli` folder next to itself and then in its own folder; it is compiled from [`LiSUltrawidePatcher.cs`](LiSUltrawidePatcher.cs) with the compiler that ships with Windows. [The release workflow](.github/workflows/build.yml) tests the workspace on Linux and Windows, builds the loader and the installers, and names the commit each release was built from. To build it yourself:
 
 ```
 cargo build --release -p lis-ultrawide-loader
@@ -154,6 +154,6 @@ The loader goes first because the installer embeds it. `cargo test --release --w
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). Each release archive contains its complete source: `LiSUltrawidePatcher.cs` and the Rust workspace. The Kraken decoder is a port of the Kraken parts of [ooz](https://github.com/powzix/ooz), Copyright (C) 2016 Powzix, under the same license.
+This project is licensed under the **GNU General Public License v3.0 or later** - see [LICENSE](LICENSE). The source of every release is this repository at the commit the release names. The Kraken decoder is a port of the Kraken parts of [ooz](https://github.com/powzix/ooz), Copyright (C) 2016 Powzix, under the same license.
 
 As an additional term under GPL-3.0 section 7(b), every copy or modified version must preserve the copyright notice and credit the original author, Kiri11, with a link to this project.

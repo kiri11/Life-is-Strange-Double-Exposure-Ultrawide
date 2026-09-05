@@ -161,7 +161,10 @@ pub fn check_camera(game: &dyn Game, exe: &Path, shipped: Option<&[u8]>) -> (Cam
         return (CameraStatus::Missing, "there is no file at that path".into());
     }
     if !exe.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(game.exe_name())) {
-        return (CameraStatus::NotGame, format!("that is not {} - select the game's own executable", game.exe_name()));
+        // the caller may have fallen back to the first game for an executable
+        // no game claims, so name every one the fix knows
+        let names: Vec<&str> = crate::games::GAMES.iter().map(|g| g.exe_name()).collect();
+        return (CameraStatus::NotGame, format!("that is not {} - select the game's own executable", names.join(" or ")));
     }
     let paths = camera_paths(game, exe);
     let dll_name = game.proxy_dlls()[0];

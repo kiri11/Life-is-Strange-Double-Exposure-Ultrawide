@@ -172,6 +172,9 @@ impl Game for DoubleExposure {
     fn title(&self) -> &'static str {
         "Life is Strange: Double Exposure"
     }
+    fn short_title(&self) -> &'static str {
+        "Double Exposure"
+    }
     fn steam_appid(&self) -> u32 {
         1874000
     }

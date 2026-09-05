@@ -124,6 +124,9 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
         1 => {
             let (game, found) = &candidates[0];
             out.line(&format!("Found game via {}", found.source));
+            if args.command == Command::Find {
+                out.line(&found_line(*game, &found.exe));
+            }
             Ok((*game, found.exe.clone()))
         }
         n if n > 1 => {
@@ -132,10 +135,12 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
             let (game, found) = &candidates[pick];
             out.line(&format!("Found game via {}", found.source));
             if args.command == Command::Find {
-                // the front-end takes the first and tells the user about the rest
+                // every installed game, the pick first: the front-end offers
+                // them as a list
+                out.line(&found_line(*game, &found.exe));
                 for (i, (g, f)) in candidates.iter().enumerate() {
                     if i != pick {
-                        out.line(&format!("Also found: {} ({})", g.title(), f.exe.display()));
+                        out.line(&found_line(*g, &f.exe));
                     }
                 }
             }
@@ -164,6 +169,11 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
     }
 }
 
+/// A `found:` line of `find`: title, short title and path, tab-separated.
+fn found_line(game: &dyn Game, exe: &Path) -> String {
+    format!("found: {}\t{}\t{}", game.title(), game.short_title(), exe.display())
+}
+
 struct Parts {
     camera: bool,
     ui: bool,
@@ -172,6 +182,13 @@ struct Parts {
 }
 
 fn run_inner(args: &Args, ui: &mut dyn Ui, out: &mut Out) -> R<i32> {
+    if args.command == Command::Find {
+        // every game the fix knows, installed or not: the front-end builds
+        // its file filter from these, so it never carries a name of its own
+        for g in games::GAMES {
+            out.line(&format!("known: {}\t{}\t{}", g.title(), g.short_title(), g.exe_name()));
+        }
+    }
     let (game, exe) = locate_game(args, ui, out)?;
     out.line(&"=".repeat(60));
     out.line(&format!(" {} - Ultrawide Fix v{VERSION}", game.title()));
@@ -190,6 +207,7 @@ fn run_inner(args: &Args, ui: &mut dyn Ui, out: &mut Out) -> R<i32> {
     };
     if args.command == Command::Status {
         // machine-readable, for the Windows front-end
+        out.line(&format!("title: {}", game.title()));
         out.line(&format!("status: {}", camera_status.as_str()));
         out.line(&format!("detail: {camera_detail}"));
         out.line(&format!("files: {}", ui_status.as_str()));
