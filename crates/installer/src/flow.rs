@@ -116,10 +116,13 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
         let abs = std::path::absolute(exe).unwrap_or_else(|_| exe.clone());
         return Ok((game, abs));
     }
-    let candidates: Vec<(&'static dyn Game, locate::Found)> = match forced {
-        Some(g) => locate::find_exe(g, self_dir().as_deref()).map(|f| vec![(g, f)]).unwrap_or_default(),
-        None => games::GAMES.iter().filter_map(|&g| locate::find_exe(g, self_dir().as_deref()).map(|f| (g, f))).collect(),
+    // every copy of every game (or of the forced one), most trustworthy first
+    let wanted: Vec<&'static dyn Game> = match forced {
+        Some(g) => vec![g],
+        None => games::GAMES.to_vec(),
     };
+    let candidates: Vec<(&'static dyn Game, locate::Found)> =
+        wanted.iter().flat_map(|&g| locate::candidates(g, self_dir().as_deref()).into_iter().map(move |f| (g, f))).collect();
     match candidates.len() {
         1 => {
             let (game, found) = &candidates[0];
@@ -131,9 +134,17 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
         }
         n if n > 1 => {
             let items: Vec<String> = candidates.iter().map(|(g, f)| format!("{} ({})", g.title(), f.exe.display())).collect();
-            let pick = ui.choose("More than one game was found; which one", &items, Some(0)).ok_or(Fail::Cancelled)?;
+            let pick = ui.choose("More than one game, or more than one copy, was found; which one", &items, Some(0)).ok_or(Fail::Cancelled)?;
             let (game, found) = &candidates[pick];
             out.line(&format!("Found game via {}", found.source));
+            // two copies of one game share the Engine.ini under the user's
+            // profile: the display tweaks cannot be installed for one alone
+            if candidates.iter().filter(|(g, _)| g.id() == game.id()).count() > 1 {
+                out.line(&format!(
+                    "Note: the copies of {} share one Engine.ini, so the display tweaks are installed and restored for all of them at once.",
+                    game.title()
+                ));
+            }
             if args.command == Command::Find {
                 // every installed game, the pick first: the front-end offers
                 // them as a list

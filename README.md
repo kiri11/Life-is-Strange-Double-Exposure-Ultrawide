@@ -18,7 +18,7 @@ The game's own files are never modified: the camera fix is a small library the g
 
 1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix-Windows.zip)** and unpack the zip anywhere.
 2. Run **`LiSUltrawidePatcher.exe`**.
-3. It finds your game and your display automatically. If it does not find the game, click **Browse...** and select the game executable. With more than one game installed, the executable field becomes a list: pick the game to fix, and run **Install** once for each game. The window title says which game is selected.
+3. It finds your game and your display automatically. If it does not find the game, click **Browse...** and select the game executable. With more than one game installed, or a game installed twice, the executable field becomes a list: pick the one to fix, and run **Install** once for each. The window title says which game is selected.
 4. Leave the options ticked and click **Install**.
 
 That is it. Start the game and play.

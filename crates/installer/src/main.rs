@@ -27,8 +27,8 @@
 //! `status` prints `title:`, `status:`, `detail:`, `files:` and `filesdetail:`
 //! lines; `find` prints one `known:` line per game the fix knows (title,
 //! short title, executable name, tab-separated), `Game executable:` for the
-//! game it picked, and one `found:` line per installed game (title, short
-//! title, path), the pick first;
+//! game it picked, one `found:` line per installed copy of a game (title,
+//! short title, path), the pick first, and `Note:` lines worth showing;
 //! the exit code is 0 for success, 1 for a usage problem or a game that was
 //! not found, 2 for an error the user can act on, 130 when cancelled; the
 //! output is UTF-8; the phrase "as administrator" in the output means a

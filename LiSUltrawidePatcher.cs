@@ -485,9 +485,23 @@ namespace LiSUltrawidePatcher
                 lblExeHeader.Text = "Game executable";
                 return;
             }
+            lblExeHeader.Text = "Game executable:  " + JoinAnd(CountedNames()) + " found";
+        }
+
+        /// <summary>The games found, in order, a game installed twice as "Double Exposure (2 copies)".</summary>
+        private List<string> CountedNames()
+        {
             List<string> names = new List<string>();
-            foreach (ExeItem f in found) names.Add(f.Short);
-            lblExeHeader.Text = "Game executable  -  " + JoinAnd(names) + " found";
+            List<int> counts = new List<int>();
+            foreach (ExeItem f in found)
+            {
+                int i = names.IndexOf(f.Short);
+                if (i < 0) { names.Add(f.Short); counts.Add(1); }
+                else counts[i]++;
+            }
+            for (int i = 0; i < names.Count; i++)
+                if (counts[i] > 1) names[i] += " (" + counts[i] + " copies)";
+            return names;
         }
 
         /// <summary>The window title names the selected game; the first game the installer knows when none is.</summary>
@@ -619,6 +633,7 @@ namespace LiSUltrawidePatcher
             else
             {
                 string via = null;
+                List<string> notes = new List<string>();
                 string text = RunCli("find") ?? "";
                 foreach (string line in text.Split('\n'))
                 {
@@ -641,18 +656,19 @@ namespace LiSUltrawidePatcher
                         found.Add(item);
                     }
                     else if (t.StartsWith("Found game via ")) via = t;
+                    else if (t.StartsWith("Note: ")) notes.Add(t);
                 }
                 if (found.Count > 1)
                 {
-                    // several games: the list, the installer's pick selected
+                    // several games, or copies of one: the list, the installer's
+                    // pick selected
                     UsePicker();
                     foreach (ExeItem item in found) cmbExe.Items.Add(item);
                     FitDropDown();
-                    List<string> names = new List<string>();
-                    foreach (ExeItem item in found) names.Add(item.Short);
-                    Log("Found " + JoinAnd(names) + " - pick the game to fix from the list. "
-                        + "Each game is fixed on its own: Install once for each.");
+                    Log("Found " + JoinAnd(CountedNames()) + " - pick the one to fix from the "
+                        + "list. Each is fixed on its own: Install once for each.");
                     if (via != null) Log(via + " (" + found[0].Short + ")");
+                    foreach (string n in notes) Log(n);
                     cmbExe.SelectedIndex = 0;
                 }
                 else if (found.Count == 1)
