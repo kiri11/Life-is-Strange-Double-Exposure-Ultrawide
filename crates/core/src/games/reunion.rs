@@ -8,12 +8,14 @@
 //! call boxes every one of them (13h). The registers and offsets differ from
 //! Double Exposure (13c, 13e); the executable's layout differs too (13a),
 //! which is why the cave goes in the section that holds the sites and
-//! nowhere else.
+//! nowhere else. The UI edits are RESEARCH.md 13i: the same fixed
+//! 3840x2160 `WindowParent` as Double Exposure's, in a UE 5.5 container.
 
 use crate::camera::cave_a_reunion;
 use crate::plan::{Plan, Site, Write, locate, rel32};
 use crate::scan::{Image, find_cave};
-use crate::ui_layout::UiFix;
+use crate::ui_layout::{Edit, Field, NewValue, UiFix};
+use crate::zen::Summary;
 
 use super::Game;
 
@@ -80,6 +82,68 @@ pub fn plan_reunion(img: &Image, upper: [u8; 4]) -> Result<Plan, String> {
     Ok(Plan { writes, notes })
 }
 
+macro_rules! edit {
+    ($pkg:expr, $widget:expr, $field:ident, $old:expr, $new:expr) => {
+        Edit { package: $pkg, widget: $widget, field: Field::$field, old: $old, new: $new }
+    };
+}
+
+/// RESEARCH.md 13i: the slot edits, the same three kinds as Double
+/// Exposure's (9c-3). `WindowParent` is the fix itself; the rest repair
+/// elements positioned by absolute coordinates on the 3840 canvas, which
+/// would otherwise shift left. Package paths are below `UiFix::ui_prefix`.
+static REUNION_EDITS: &[Edit] = &[
+    // --- the fix itself
+    edit!("BP/BP_IrisUIWindowManager.uasset", "WindowParent", Right, 3840.0, NewValue::Width),
+    // --- centred by hardcoding half of 3840
+    edit!("BP/Window/BP_PauseWindow.uasset", "Pause", Left, 1920.0, NewValue::HalfWidth),
+    // --- fixed 3840-wide, not centred; must span the widened parent
+    edit!("BP/Window/BP_SettingsWindow.uasset", "Background", Right, 3840.0, NewValue::Width),
+    edit!("BP/Window/BP_SaveSelectWindow.uasset", "D9Image", Right, 3840.0, NewValue::Width),
+    edit!("BP/Window/BP_SquareEnixAccountWindow.uasset", "CanvasPanel_Background", Right, 3840.0, NewValue::Width),
+    edit!("BP/Window/BP_SquareEnixAccountWindow.uasset", "WidgetSwitcher_CurrentView", Right, 3840.0, NewValue::Width),
+    edit!("BP/Window/BP_OutfitWindow.uasset", "Background", Right, 3840.0, NewValue::Width),
+    edit!("BP/Window/BP_MontageWindow.uasset", "Background", Right, 3840.0, NewValue::Width),
+    edit!("BP/Window/BP_FRPosterWindow.uasset", "D9Image", Right, 3840.0, NewValue::Width),
+    edit!("BP/Controls/Settings/BP_UISettings.uasset", "Buttons", Right, 3840.0, NewValue::Width),
+    edit!("BP/Controls/Settings/BP_OutfitSettings.uasset", "Buttons", Right, 3840.0, NewValue::Width),
+    edit!("BP/Controls/PlayerMenu/Collectibles/BP_CollectiblePosterUI.uasset", "D9Image", Right, 3840.0, NewValue::Width),
+    edit!("BP/Controls/PlayerMenu/Collectibles/BP_ChloePhotoPosterUI.uasset", "D9Image", Right, 3840.0, NewValue::Width),
+    edit!("BP/Controls/PlayerMenu/Collectibles/BP_IrisPhotoPosterUI.uasset", "D9Image", Right, 3840.0, NewValue::Width),
+    // --- the scroll buttons of the reading views, centred by an absolute
+    //     X on the 3840 canvas (1870 + half their 100 px width = 1920)
+    edit!("BP/Window/BP_FRPosterWindow.uasset", "UpButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    edit!("BP/Window/BP_FRPosterWindow.uasset", "DownButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    edit!("BP/Window/BP_ObjectInspectWindow.uasset", "UpButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    edit!("BP/Window/BP_ObjectInspectWindow.uasset", "DownButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    edit!("BP/Controls/PlayerMenu/Collectibles/BP_ChloePhotoPosterUI.uasset", "UpButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    edit!("BP/Controls/PlayerMenu/Collectibles/BP_ChloePhotoPosterUI.uasset", "DownButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    edit!("BP/Controls/PlayerMenu/Collectibles/BP_IrisPhotoPosterUI.uasset", "UpButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    edit!("BP/Controls/PlayerMenu/Collectibles/BP_IrisPhotoPosterUI.uasset", "DownButton", Left, 1870.0, NewValue::Inset(1870.0)),
+    // --- full-bleed 16:9 compositions: re-inset so they keep their authored
+    //     framing instead of riding out to the physical screen edges
+    edit!("BP/Window/BP_MainMenuWindow.uasset", "MainButtons", Left, 220.0, NewValue::Inset(220.0)),
+    edit!("BP/Window/BP_MainMenuWindow.uasset", "D9Image", Left, 184.0, NewValue::Inset(184.0)),
+    edit!("BP/Window/BP_MainMenuWindow.uasset", "D9TextBlock", Left, 220.0, NewValue::Inset(220.0)),
+    edit!("BP/Window/BP_MainMenuWindow.uasset", "GamerTag", Left, 220.0, NewValue::Inset(220.0)),
+    edit!("BP/Window/BP_MainMenuWindow.uasset", "InfocastPanel", Left, -220.0, NewValue::Outset(-220.0)),
+    edit!("BP/Window/BP_TitleWindow.uasset", "GamerTag", Left, 220.0, NewValue::Inset(220.0)),
+    edit!("BP/Window/BP_TitleWindow.uasset", "PressAnyKey", Left, 220.0, NewValue::Inset(220.0)),
+];
+
+static REUNION_UI: UiFix = UiFix {
+    source: "pakchunk0-Windows",
+    content_prefix: "Iris/Content/",
+    ui_prefix: "Iris/Content/UI/",
+    mount_point: "../../../Iris/Content/",
+    mod_name: "LiSUltrawideUI_P",
+    design: (3840.0, 2160.0),
+    edits: REUNION_EDITS,
+    toc_version: 8,
+    container_header_version: 4,
+    summary: Summary::Ue53,
+};
+
 impl Game for Reunion {
     fn id(&self) -> &'static str {
         "reunion"
@@ -105,9 +169,8 @@ impl Game for Reunion {
     fn plan_camera(&self, image: &Image, gate_upper: [u8; 4]) -> Result<Plan, String> {
         plan_reunion(image, gate_upper)
     }
-    /// None until the game's UI packages are known (RESEARCH 13g).
     fn ui(&self) -> Option<&'static UiFix> {
-        None
+        Some(&REUNION_UI)
     }
     fn ini_markers(&self) -> (&'static str, &'static str) {
         (

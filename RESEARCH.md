@@ -574,7 +574,7 @@ Everything above is verified against files, and the finished container is read b
 **Game:** *Life is Strange: Reunion* (project `Iris`, Steam app 2624870, install folder `LifeisStrangeReunion`)
 **Engine:** Unreal Engine 5.5.4 (the string `Unreal Engine 5.5.4` is in the executable; the build stamp reads `UE5 Jan 17 2026 01:53:27`, `UE5-CL-0`)
 **Binary:** `Iris/Binaries/Win64/Iris-Win64-Shipping.exe`, 688,115,200 bytes, Denuvo
-**Status (2026-09-03):** the camera fix is implemented (`crates/core/src/games/reunion.rs`) and verified in the game: menu, cutscenes and exploration all render full width at 5120x2160 (13h). It is the branch edit and cave A only; cave B, which Double Exposure needs, boxes Reunion's cutscenes and is left out (13e). Sections 13a to 13f are read from the files on disk; 13g lists what is still open.
+**Status (2026-09-04):** the camera fix is implemented (`crates/core/src/games/reunion.rs`) and verified in the game: menu, cutscenes and exploration all render full width at 5120x2160 (13h). It is the branch edit and cave A only; cave B, which Double Exposure needs, boxes Reunion's cutscenes and is left out (13e). The full-width UI is implemented too (13i): the same fixed 3840x2160 `WindowParent` as Double Exposure's, delivered as a mod container in the game's own UE 5.5 formats. Sections 13a to 13f are read from the files on disk; 13g lists what is still open.
 
 Two of the three Double Exposure changes transfer: the same two immediates in the projection function and the same seven-byte site in `UCameraComponent::GetCameraView`. The third, cave B on the cine component's single direct `Super` call, exists in the binary but must not be applied here (13e). What changed is the register allocation at each site, the structure offsets (5.5 grew `FMinimalViewInfo` by 20 bytes ahead of `AspectRatio`), and the layout of the executable, which Denuvo wraps.
 
@@ -734,7 +734,7 @@ The camera classes, from the UTF-16 class-name strings (228 names contain `Camer
 
 1. The letterbox ramp of section 10, measured with a UE4SS probe: whether Reunion animates a camera's aspect at dialogue boundaries as Double Exposure does, and whether the divisor pin behaves there. No zoom or snap has been reported from the first play session, so this is a check, not a known problem.
 2. Loading and transition views without cave B: if one ever shows stretched or misframed, that is where a class-aware cave B would go (13e).
-3. The UI: whether any of it is boxed to 16:9 on 5120x2160 (the settings page is not, 13h), and if so what `BP_IrisUIWindowManager`'s `WindowParent` slot holds (9c). The container reader, once taught TOC version 8's meta layout, can answer the second half offline.
+3. Resolved in 13i: `BP_IrisUIWindowManager`'s `WindowParent` is the same fixed 3840x2160 box, and the UI part of the fix now covers Reunion. What is left is the in-game pass over the screens the audit changed beyond the loading overlay (13i lists them).
 4. Whether the game reads the `Engine.ini` the installer writes at `%LOCALAPPDATA%\Iris\Saved\Config\Windows\Engine.ini` (the path follows the project name as Double Exposure's does; the game created nothing else under `Iris\Saved` on its first run, so the folder is the one it uses).
 
 ### 13h. First Run (2026-09-03)
@@ -768,3 +768,38 @@ A second launch (the same install) was watched for 200 seconds with a screenshot
 * Several dialogue and cutscene frames (a bedroom, a snowfield): the picture reaches the top, bottom and right edges, but a black band about 16% of the width sat on the left, and one frame had bands on both sides of different widths. The owner's summary of that session: **menu wide, cutscenes narrow, exploration wide.**
 
 **Third launch, cave B off.** The same loader built without cave B (four writes) was installed and the owner replayed the opening: **cutscenes wide.** So the narrow cutscenes were cave B's doing, which fits the class landscape (13f): Reunion's cutscenes are `UD9CineCameraComponent` views, and cave B re-asserts the constraint on every cine view. The descriptor now has no cave B (13e). The asymmetric band seen with cave B in place was the game's own dialogue framing on top of a constrained view, and has not been seen since.
+
+### 13i. The UI (2026-09-04)
+
+Reunion's UI is boxed exactly as Double Exposure's is (9c): `BP_IrisUIWindowManager` has the same 26 exports, and its `WindowParent` slot is the same point-anchored `(0.5,0.5)` slot with offsets `(0, 0, 3840, 2160)`, the fixed 16:9 box every window is reparented into. The loading window (`BlackScreen` and `LoadingVisuals` full-stretch, the text and hourglass anchored to the bottom left) and the transition window (`FullscreenImage` full-stretch) are the same as 9b, so the loading side-peek of section 5 comes from the same one slot. The settings page looked full-width in 13h because its `Background` is a fixed 3840-wide image starting at the box's left edge and `TabMenu` stretches: the parts of it that reach past the box do so by accident, not by design.
+
+**Reading the containers.** Three things changed between UE 5.2 and 5.5, all in `crates/core`:
+
+* `FIoContainerHeader` is version 4. The store entries lost the export and bundle counts with version 3 (`FFilePackageStoreEntry` is 16 bytes: the two `{count, offset}` array views), and version 4 appended a soft-package-reference table after the redirects: a 4-byte bool, then the ids and per-package index views when it is set. The game's header has it unset (`bContainsSoftPackageReferences = 0`), so the mod header writes the same. The reader and writer take the version (`parse_container_header`, `build_container_header`); the header of `pakchunk0` rebuilds to the byte from what is parsed, as it did for version 2.
+* `FZenPackageSummary` is the 5.3 layout: the graph data went, `DependencyBundleHeadersOffset` (+40), `DependencyBundleEntriesOffset` (+44) and `ImportedPackageNamesOffset` (+48) came, and the name batch moved from +44 to +52. The export payloads are no longer in export-bundle order: they sit at `HeaderSize + CookedSerialOffset`, in export-map order (the bundle order of this package puts the class first; the data does not). `ZenPackage::parse` takes a `Summary` (`Ue52` or `Ue53`), which the game descriptor supplies.
+* TOC version 8 (`ReplaceIoChunkHashWithIoHash`): the per-chunk meta at the end of the `.utoc` is 24 bytes (20-byte hash, flags, 3 bytes of padding) instead of 33 (32-byte hash, flags). Nothing else in the header moved; `build_container` writes whichever the game uses.
+
+`UCanvasPanelSlot` serializes as before (`LayoutData`, `bAutoSize`, `ZOrder`, `Parent`, `Content`; `FAnchorData` with float margins and double vectors), so `unver.rs` needed nothing. All 1,660 packages under `Iris/Content/UI` parse and all 2,112 canvas slots in them decode.
+
+**The audit** (the 9c-2 walk, redone over Reunion's 1,660 UI packages) found the same picture: 37 deliberate centred 3840x2160 boxes (`BP_PlayerChoices*`, the photography windows, three of the player-menu tabs, `InputButtonBarOverride` in several windows), the `Pause` title centred by a hardcoded 1920, a set of fixed 3840-wide backgrounds anchored at `(0,0)` under full-stretch panels, the main-menu and title compositions inset by 220 from the box edge, and the journal pages positioned by absolute X (unchanged from section 11: they shift with `JournalTabUI`, which stretches; the poster reader under `ReadPanel` is the same idiom). New here: the reading views (`BP_FRPosterWindow`, `BP_ObjectInspectWindow`, `BP_ChloePhotoPosterUI`, `BP_IrisPhotoPosterUI`) put their scroll buttons at `Left = 1870` under a full-stretch `ReadPanel`, which is 1920 minus half their width - centred by absolute X, the same idiom as `Pause`. `BP_ShiftChoiceUI` does not exist in this game.
+
+The 30 edits, in `reunion.rs`, all derived from the design space as in 9c-3:
+
+| Package | Slot | Field | Change |
+|---|---|---|---|
+| `BP_IrisUIWindowManager` | `WindowParent` | Right | `3840 -> designW` |
+| `BP_PauseWindow` | `Pause` | Left | `1920 -> designW/2` |
+| `BP_SettingsWindow`, `BP_OutfitWindow` | `Background` | Right | `3840 -> designW` |
+| `BP_SaveSelectWindow`, `BP_FRPosterWindow` | `D9Image` | Right | `3840 -> designW` |
+| `BP_SquareEnixAccountWindow` | `CanvasPanel_Background`, `WidgetSwitcher_CurrentView` | Right | `3840 -> designW` |
+| `BP_MontageWindow` | `Background` | Right | `3840 -> designW` |
+| `BP_UISettings`, `BP_OutfitSettings` | `Buttons` | Right | `3840 -> designW` |
+| `BP_CollectiblePosterUI`, `BP_ChloePhotoPosterUI`, `BP_IrisPhotoPosterUI` | `D9Image` | Right | `3840 -> designW` |
+| `BP_FRPosterWindow`, `BP_ObjectInspectWindow`, `BP_ChloePhotoPosterUI`, `BP_IrisPhotoPosterUI` | `UpButton`, `DownButton` | Left | `+ (designW-3840)/2` |
+| `BP_MainMenuWindow` | `MainButtons`, `D9Image`, `D9TextBlock`, `GamerTag` | Left | `+ (designW-3840)/2` |
+| `BP_MainMenuWindow` | `InfocastPanel` | Left | `- (designW-3840)/2` |
+| `BP_TitleWindow` | `GamerTag`, `PressAnyKey` | Left | `+ (designW-3840)/2` |
+
+**Checked in the game (2026-09-04, 5120x2160 at the 4096x1728 window):** `install --yes --game reunion` published the 16 packages with 0 mismatches; the game started with the container mounted, the loader log ended in `applied 4 writes`, the main menu rendered exactly as stock (title and buttons at their authored inset, so the re-inset edits do what they should), and Continue showed a loading plate black across the full width with the scene loading behind it: no side-peek. The intro montage plays with no UI for well over two minutes after launch; Escape skips it to the menu. Not yet looked at: the pause, settings, reading and player-menu screens listed above.
+
+The descriptor's `UiFix` names the formats (`toc_version: 8`, `container_header_version: 4`, `summary: Ue53`) and the `Iris/Content/` paths; the mount point is `../../../Iris/Content/`, the mod name stays `LiSUltrawideUI_P`. The UMG design size is taken to be 3840x2160, as the `WindowParent` box says; the cooked `DefaultEngine.ini` sits compressed in Reunion's 2 GB `.pak`, which the fix has no reader for, so the `ScaleToFit` rule of 9c is assumed rather than read. The test `reads_and_rewrites_reunions_ui_packages` pins the 16 packages (chunk, size, hash, exports, every slot the edits touch) and builds the container for 5120x2160 into a temporary folder, reads it back through the container reader, and checks that each package differs from stock in exactly the edited floats.

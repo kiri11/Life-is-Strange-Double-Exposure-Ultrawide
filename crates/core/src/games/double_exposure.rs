@@ -7,6 +7,7 @@ use crate::camera::{cave_a, cave_b};
 use crate::plan::{Plan, Site, Write, locate, rel32};
 use crate::scan::{Image, find_cave};
 use crate::ui_layout::{Edit, Field, NewValue, UiFix};
+use crate::zen::Summary;
 
 use super::Game;
 
@@ -161,6 +162,7 @@ static DE_UI: UiFix = UiFix {
     edits: DE_EDITS,
     toc_version: 5,
     container_header_version: 2,
+    summary: Summary::Ue52,
 };
 
 impl Game for DoubleExposure {
