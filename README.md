@@ -16,7 +16,7 @@ The game's own files are never modified: the camera fix is a small library the g
 
 ## Installation (Windows)
 
-1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix-Windows.zip)** and unpack the zip anywhere.
+1. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Ultrawide-Fix/releases/latest/download/LiS-Ultrawide-Fix-Windows.zip)** and unpack the zip anywhere.
 2. Run **`LiSUltrawidePatcher.exe`**.
 3. It finds your game and your display automatically. If it does not find the game, click **Browse...** and select the game executable. With more than one game installed, or a game installed twice, the executable field becomes a list: pick the one to fix, and run **Install** once for each. The window title says which game is selected.
 4. Leave the options ticked and click **Install**.
@@ -41,12 +41,12 @@ Click **Restore original** in the installer.
 
 ## Installation (Linux and Steam Deck)
 
-> **Verified on Bazzite** (Desktop Mode, Steam, Proton) as well as on Windows. The installer also supports SteamOS, the Steam Deck and Flatpak or Snap Steam, which have not been tried on real hardware yet. If something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues).
+> **Verified on Bazzite** (Desktop Mode, Steam, Proton) as well as on Windows. The installer also supports SteamOS, the Steam Deck and Flatpak or Snap Steam, which have not been tried on real hardware yet. If something does not work, please [open an issue](https://github.com/kiri11/Life-is-Strange-Ultrawide-Fix/issues).
 
 The installer is a single static binary; it needs nothing installed.
 
 1. Start the game once and quit, so that Steam creates the Proton prefix that holds `Engine.ini` and Wine's registry.
-2. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/releases/latest/download/LiS-Ultrawide-Fix-Linux.tar.gz)** and unpack it. On the Steam Deck, switch to **Desktop Mode** first.
+2. **[Download the fix](https://github.com/kiri11/Life-is-Strange-Ultrawide-Fix/releases/latest/download/LiS-Ultrawide-Fix-Linux.tar.gz)** and unpack it. On the Steam Deck, switch to **Desktop Mode** first.
 3. Open a terminal (**Konsole** on the Deck), `cd` into the unpacked folder and run:
 
 ```bash
@@ -119,7 +119,7 @@ The loader writes `LiSUltrawideCamera.log` next to itself at every launch, sayin
 
 ### Still broken? Open an issue
 
-[Open an issue](https://github.com/kiri11/Life-is-Strange-Double-Exposure-Ultrawide/issues) and include:
+[Open an issue](https://github.com/kiri11/Life-is-Strange-Ultrawide-Fix/issues) and include:
 
 - What you did and which options were ticked.
 - What is wrong and where, with a screenshot if possible.
