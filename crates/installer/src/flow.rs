@@ -128,7 +128,7 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
             let (game, found) = &candidates[0];
             out.line(&format!("Found game via {}", found.source));
             if args.command == Command::Find {
-                out.line(&found_line(*game, &found.exe));
+                out.line(&found_line(*game, found));
             }
             Ok((*game, found.exe.clone()))
         }
@@ -148,10 +148,10 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
             if args.command == Command::Find {
                 // every installed game, the pick first: the front-end offers
                 // them as a list
-                out.line(&found_line(*game, &found.exe));
+                out.line(&found_line(*game, found));
                 for (i, (g, f)) in candidates.iter().enumerate() {
                     if i != pick {
-                        out.line(&found_line(*g, &f.exe));
+                        out.line(&found_line(*g, f));
                     }
                 }
             }
@@ -180,9 +180,9 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
     }
 }
 
-/// A `found:` line of `find`: title, short title and path, tab-separated.
-fn found_line(game: &dyn Game, exe: &Path) -> String {
-    format!("found: {}\t{}\t{}", game.title(), game.short_title(), exe.display())
+/// A `found:` line of `find`: title, short title, path and where it was found, tab-separated.
+fn found_line(game: &dyn Game, found: &locate::Found) -> String {
+    format!("found: {}\t{}\t{}\t{}", game.title(), game.short_title(), found.exe.display(), found.source)
 }
 
 struct Parts {

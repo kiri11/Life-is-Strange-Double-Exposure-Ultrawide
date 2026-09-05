@@ -116,6 +116,7 @@ namespace LiSUltrawidePatcher
             public string Title;      // the installer's full title, or null for a file no game claims
             public string Short;      // what the list and the heading call it
             public string Path;
+            public string Source;     // where the installer found it, null for a browsed file
             public override string ToString() { return Short + "  -  " + Path; }
         }
 
@@ -615,11 +616,11 @@ namespace LiSUltrawidePatcher
             catch { return null; }
         }
 
-        /// <summary>The fields of a "known:" or "found:" line: title, short title, exe or path.</summary>
-        private static string[] Fields(string line, string prefix)
+        /// <summary>The tab-separated fields of a "known:" or "found:" line, or null when there are not n of them.</summary>
+        private static string[] Fields(string line, string prefix, int n)
         {
             string[] f = line.Substring(prefix.Length).Split('\t');
-            return f.Length == 3 ? f : null;
+            return f.Length == n ? f : null;
         }
 
         private void AutoDetect()
@@ -632,14 +633,13 @@ namespace LiSUltrawidePatcher
             }
             else
             {
-                string via = null;
                 List<string> notes = new List<string>();
                 string text = RunCli("find") ?? "";
                 foreach (string line in text.Split('\n'))
                 {
                     string t = line.Trim();
                     string[] f;
-                    if (t.StartsWith("known: ") && (f = Fields(t, "known: ")) != null)
+                    if (t.StartsWith("known: ") && (f = Fields(t, "known: ", 3)) != null)
                     {
                         GameInfo g = new GameInfo();
                         g.Title = f[0];
@@ -647,15 +647,15 @@ namespace LiSUltrawidePatcher
                         g.Exe = f[2];
                         known.Add(g);
                     }
-                    else if (t.StartsWith("found: ") && (f = Fields(t, "found: ")) != null)
+                    else if (t.StartsWith("found: ") && (f = Fields(t, "found: ", 4)) != null)
                     {
                         ExeItem item = new ExeItem();
                         item.Title = f[0];
                         item.Short = f[1];
                         item.Path = f[2];
+                        item.Source = f[3];
                         found.Add(item);
                     }
-                    else if (t.StartsWith("Found game via ")) via = t;
                     else if (t.StartsWith("Note: ")) notes.Add(t);
                 }
                 if (found.Count > 1)
@@ -665,16 +665,15 @@ namespace LiSUltrawidePatcher
                     UsePicker();
                     foreach (ExeItem item in found) cmbExe.Items.Add(item);
                     FitDropDown();
-                    Log("Found " + JoinAnd(CountedNames()) + ", pick one to fix.");
-                    Log("Each is fixed on its own: Install once for each.");
-                    if (via != null) Log(via + " (" + found[0].Short + ")");
+                    foreach (ExeItem item in found) Log("Found " + item.Short + " via " + item.Source + ".");
+                    Log("Pick one to fix. Each is fixed on its own: install once for each.");
                     foreach (string n in notes) Log(n);
                     cmbExe.SelectedIndex = 0;
                 }
                 else if (found.Count == 1)
                 {
                     txtExePath.Text = found[0].Path;
-                    Log(via ?? "Found the game.");
+                    Log("Found " + found[0].Short + " via " + found[0].Source + ".");
                 }
                 else
                 {
