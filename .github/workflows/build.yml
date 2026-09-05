@@ -5,7 +5,10 @@
 #
 # Every push to main cuts its own release and no release is ever overwritten,
 # so a build that turns out bad can always be compared against the one before
-# it. Put [skip ci] in the commit subject to push without releasing.
+# it. Put [skip ci] in the commit subject to push without releasing. The
+# commit message is the release notes: the subject is the first line and
+# the body, if any, follows it, so write the notes for a release in the
+# body of the commit (or merge commit) that ships it.
 #
 # One archive per platform. Windows: the front-end, with the installer (the
 # loader embedded) in a cli folder under it. Linux: the static installer.
@@ -234,7 +237,15 @@ jobs:
         run: |
           tag="v$VERSION"
           run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          notes="$(git log -1 --pretty=%s)
+          # The whole commit message, minus the trailer block (Signed-off-by
+          # and the like) that git keeps at the end of the body.
+          subject="$(git log -1 --pretty=%s)"
+          body="$(git log -1 --pretty=%b)"
+          trailers="$(git log -1 --pretty='%(trailers)')"
+          body="$(printf '%s' "${body%"$trailers"}")"
+          notes="$subject
+
+          $body
 
           **Windows:** download LiS-Ultrawide-Fix-Windows.zip, unpack it anywhere and run \`LiSUltrawidePatcher.exe\`.
 
