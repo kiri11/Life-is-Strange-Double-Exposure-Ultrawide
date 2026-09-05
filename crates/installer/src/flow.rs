@@ -116,21 +116,45 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
         let abs = std::path::absolute(exe).unwrap_or_else(|_| exe.clone());
         return Ok((game, abs));
     }
-    let candidates: Vec<(&'static dyn Game, locate::Found)> = match forced {
-        Some(g) => locate::find_exe(g, self_dir().as_deref()).map(|f| vec![(g, f)]).unwrap_or_default(),
-        None => games::GAMES.iter().filter_map(|&g| locate::find_exe(g, self_dir().as_deref()).map(|f| (g, f))).collect(),
+    // every copy of every game (or of the forced one), most trustworthy first
+    let wanted: Vec<&'static dyn Game> = match forced {
+        Some(g) => vec![g],
+        None => games::GAMES.to_vec(),
     };
+    let candidates: Vec<(&'static dyn Game, locate::Found)> =
+        wanted.iter().flat_map(|&g| locate::candidates(g, self_dir().as_deref()).into_iter().map(move |f| (g, f))).collect();
     match candidates.len() {
         1 => {
             let (game, found) = &candidates[0];
             out.line(&format!("Found game via {}", found.source));
+            if args.command == Command::Find {
+                out.line(&found_line(*game, found));
+            }
             Ok((*game, found.exe.clone()))
         }
         n if n > 1 => {
             let items: Vec<String> = candidates.iter().map(|(g, f)| format!("{} ({})", g.title(), f.exe.display())).collect();
-            let pick = ui.choose("More than one game was found; which one", &items, Some(0)).ok_or(Fail::Cancelled)?;
+            let pick = ui.choose("More than one game, or more than one copy, was found; which one", &items, Some(0)).ok_or(Fail::Cancelled)?;
             let (game, found) = &candidates[pick];
             out.line(&format!("Found game via {}", found.source));
+            // two copies of one game share the Engine.ini under the user's
+            // profile: the display tweaks cannot be installed for one alone
+            if candidates.iter().filter(|(g, _)| g.id() == game.id()).count() > 1 {
+                out.line(&format!(
+                    "Note: the copies of {} share one Engine.ini, so the display tweaks are installed and restored for all of them at once.",
+                    game.title()
+                ));
+            }
+            if args.command == Command::Find {
+                // every installed game, the pick first: the front-end offers
+                // them as a list
+                out.line(&found_line(*game, found));
+                for (i, (g, f)) in candidates.iter().enumerate() {
+                    if i != pick {
+                        out.line(&found_line(*g, f));
+                    }
+                }
+            }
             Ok((*game, found.exe.clone()))
         }
         _ => {
@@ -156,6 +180,11 @@ fn locate_game(args: &Args, ui: &mut dyn Ui, out: &mut dyn Report) -> R<(&'stati
     }
 }
 
+/// A `found:` line of `find`: title, short title, path and where it was found, tab-separated.
+fn found_line(game: &dyn Game, found: &locate::Found) -> String {
+    format!("found: {}\t{}\t{}\t{}", game.title(), game.short_title(), found.exe.display(), found.source)
+}
+
 struct Parts {
     camera: bool,
     ui: bool,
@@ -164,6 +193,13 @@ struct Parts {
 }
 
 fn run_inner(args: &Args, ui: &mut dyn Ui, out: &mut Out) -> R<i32> {
+    if args.command == Command::Find {
+        // every game the fix knows, installed or not: the front-end builds
+        // its file filter from these, so it never carries a name of its own
+        for g in games::GAMES {
+            out.line(&format!("known: {}\t{}\t{}", g.title(), g.short_title(), g.exe_name()));
+        }
+    }
     let (game, exe) = locate_game(args, ui, out)?;
     out.line(&"=".repeat(60));
     out.line(&format!(" {} - Ultrawide Fix v{VERSION}", game.title()));
@@ -182,6 +218,7 @@ fn run_inner(args: &Args, ui: &mut dyn Ui, out: &mut Out) -> R<i32> {
     };
     if args.command == Command::Status {
         // machine-readable, for the Windows front-end
+        out.line(&format!("title: {}", game.title()));
         out.line(&format!("status: {}", camera_status.as_str()));
         out.line(&format!("detail: {camera_detail}"));
         out.line(&format!("files: {}", ui_status.as_str()));
